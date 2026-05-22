@@ -11,10 +11,10 @@ out/
 *.ipr
 *.iws
 
-# Env
+# Env — ignore every dotenv variant; .env.example is the only tracked one.
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Local working-state doc — not part of the shipped reference.
 PLAN.md

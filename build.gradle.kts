@@ -77,10 +77,6 @@ tasks.named<JavaExec>("run") {
     systemProperty("jna.library.path", nativeLibPath)
 }
 
-tasks.jar {
-    manifest {
-        attributes["Main-Class"] = "MainKt"
-    }
-    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    from(configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) })
-}
+// No fat jar. Flyway 10's classpath plugin discovery (via META-INF/services)
+// breaks when those files collide during jar merging — Docker image uses the
+// `application` plugin's installDist output (separate jars in lib/).

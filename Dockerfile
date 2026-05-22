@@ -3,6 +3,10 @@
 # Stage 1 pulls the SDK from mvn.breez.technology; the published KMP-jvm
 # artifact bundles native libs for darwin + linux on both arches, so the
 # image needs no per-host staging. Stage 2 is a thin JRE runtime.
+#
+# Uses the Gradle `application` plugin's installDist output rather than a
+# merged fat jar — Flyway 10's plugin discovery (META-INF/services) doesn't
+# survive jar merging, which breaks migration filename parsing.
 
 FROM gradle:8.4-jdk17 AS app-builder
 WORKDIR /work
@@ -13,7 +17,7 @@ COPY gradlew gradlew.bat ./
 # Prime the dependency graph before sources change.
 RUN ./gradlew --no-daemon dependencies > /dev/null 2>&1 || true
 COPY src ./src
-RUN ./gradlew --no-daemon assemble
+RUN ./gradlew --no-daemon installDist
 
 FROM eclipse-temurin:17-jre-jammy AS runtime
 WORKDIR /app
@@ -23,12 +27,12 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends tini ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# Application jar.
-COPY --from=app-builder /work/build/libs/sdk-mu-demo-0.1.0.jar /app/app.jar
+# bin/sdk-mu-demo startup script + lib/*.jar (app jar + each dependency).
+COPY --from=app-builder /work/build/install/sdk-mu-demo /app
 
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75"
 ENV PORT=8080
 EXPOSE 8080
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
+CMD ["sh", "-c", "exec /app/bin/sdk-mu-demo"]
