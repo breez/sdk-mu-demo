@@ -8,8 +8,10 @@ import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
+import io.ktor.server.plugins.callloging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.cors.routing.CORS
+import io.ktor.server.request.path
 import io.ktor.server.plugins.ratelimit.RateLimit
 import io.ktor.server.plugins.ratelimit.RateLimitName
 import io.ktor.server.plugins.ratelimit.rateLimit
@@ -55,6 +57,11 @@ fun main(): Unit = runBlocking {
 
     log.info("listening on :{}", cfg.port)
     embeddedServer(Netty, port = cfg.port) {
+        install(CallLogging) {
+            // Skip Fly's healthcheck polling; everything else is signal.
+            filter { call -> call.request.path() !in setOf("/healthz", "/readyz") }
+        }
+
         install(ContentNegotiation) {
             json(Json {
                 ignoreUnknownKeys = true

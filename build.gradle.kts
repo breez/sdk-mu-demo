@@ -36,6 +36,7 @@ dependencies {
     implementation("io.ktor:ktor-server-status-pages-jvm:2.3.13")
     implementation("io.ktor:ktor-server-cors-jvm:2.3.13")
     implementation("io.ktor:ktor-server-rate-limit-jvm:2.3.13")
+    implementation("io.ktor:ktor-server-call-logging-jvm:2.3.13")
 
     implementation("ch.qos.logback:logback-classic:1.5.6")
     implementation("net.logstash.logback:logstash-logback-encoder:7.4")

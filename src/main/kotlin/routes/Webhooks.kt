@@ -74,6 +74,7 @@ fun Route.webhooks(webhookSecret: String, sdk: SdkAccess) {
             return@post
         }
 
+        log.info("webhook handled user={} body_bytes={}", userId, raw.size)
         call.respond(WebhookAck(ok = true))
     }
 }
