@@ -32,6 +32,10 @@ class SdkAccess(
         // build() and rejects a mismatch. The context is built once with
         // these values; every per-request Config must reuse them.
         it.apiKey = apiKey
+        // Keep BOLT11 invoices pure Lightning — don't embed a spark address
+        // hint. Already false in defaultServerConfig, set explicitly so the
+        // intent survives an upstream default flip.
+        it.preferSparkOverLightning = false
     }
 
     suspend fun <T> withUser(userId: String, op: suspend (BreezSdk) -> T): T {

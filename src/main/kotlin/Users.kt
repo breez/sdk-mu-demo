@@ -1,4 +1,5 @@
 import breez_sdk_spark.RegisterWebhookRequest
+import breez_sdk_spark.UpdateUserSettingsRequest
 import breez_sdk_spark.WebhookEventType
 import io.ktor.server.application.call
 import io.ktor.server.response.respond
@@ -47,12 +48,19 @@ fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig) {
             }
         }
 
-        // Webhook registration is best-effort: if the SSP can't reach
-        // PUBLIC_BASE_URL (typical of local dev without a tunnel) we still
-        // return the user. The price is no webhook-driven syncs for this
-        // wallet — addressed by the deferred "periodic sync backstop" item.
+        // One SDK session does both: flip the wallet to private mode (so
+        // transfers don't leak the master identity pubkey) and register the
+        // webhook. Best-effort — if the SSP can't reach PUBLIC_BASE_URL or
+        // the private-mode RPC fails, we still return the user. Private
+        // mode persists server-side, so a later sync inherits it.
         val webhookId: String? = try {
             sdk.withUser(userId) {
+                it.updateUserSettings(
+                    UpdateUserSettingsRequest(
+                        sparkPrivateModeEnabled = true,
+                        stableBalanceActiveLabel = null,
+                    )
+                )
                 it.registerWebhook(
                     RegisterWebhookRequest(
                         url = "${cfg.publicBaseUrl}/webhooks/sdk/$userId",
@@ -64,10 +72,10 @@ fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig) {
                             WebhookEventType.StaticDepositFinished,
                         ),
                     )
-                )
-            }.webhookId
+                ).webhookId
+            }
         } catch (e: Exception) {
-            log.warn("webhook registration failed for user {}: {}", userId, e.message)
+            log.warn("user provisioning (private mode / webhook) failed for {}: {}", userId, e.message)
             null
         }
 

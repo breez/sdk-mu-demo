@@ -139,7 +139,12 @@ fun Route.send(ds: DataSource, sdk: SdkAccess) {
 
         val options: SendPaymentOptions? = when (entry.prepared.paymentMethod) {
             is SendPaymentMethod.Bolt11Invoice ->
-                SendPaymentOptions.Bolt11Invoice(preferSpark = false, completionTimeoutSecs = null)
+                // Block for up to 20s on the SSP confirmation so the response
+                // status reflects the terminal outcome instead of "pending"
+                // forever. On timeout the SDK returns the pre-confirmation
+                // payment (status=pending) — no throw. Interim until WS push
+                // lands in v1.1; then drop back to null.
+                SendPaymentOptions.Bolt11Invoice(preferSpark = false, completionTimeoutSecs = 20u)
             is SendPaymentMethod.BitcoinAddress ->
                 SendPaymentOptions.BitcoinAddress(confirmationSpeed = OnchainConfirmationSpeed.FAST)
             else -> null
