@@ -1,6 +1,7 @@
 import breez_sdk_spark.RegisterWebhookRequest
 import breez_sdk_spark.UpdateUserSettingsRequest
 import breez_sdk_spark.WebhookEventType
+import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
@@ -25,12 +26,13 @@ data class CreateUserResponse(
  *   api_key      = `mu_` + Crockford-base32(32 random bytes)   (shown once)
  *   stored       = SHA-256(api_key) hex
  *
- * Also registers a per-user webhook with the SSP so the SDK can deliver
- * receive/send/coop-exit/static-deposit events to us. The shared
- * `WEBHOOK_SECRET` signs each delivery (see `routes/Webhooks.kt`).
- *
- * Webhook registration failures roll the user back so we don't leave
- * orphan rows for which no events will ever arrive.
+ * Provisioning order matters: we flip the wallet to private mode and
+ * register the SSP webhook *before* inserting the user row. If either
+ * step fails we 502 and never persist the user, so the client retries
+ * with a fresh ULID instead of being left with a public-mode wallet or
+ * a row that gets no payment events. The SDK-side state (private flag,
+ * webhook registration) lands on a wallet whose userId we never return —
+ * unreachable and effectively garbage.
  */
 fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig) {
     post("/users") {
@@ -38,22 +40,7 @@ fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig) {
         val apiKey = "mu_" + crockfordEncode(randomBytes(32))
         val keyHash = sha256Hex(apiKey.toByteArray(Charsets.UTF_8))
 
-        ds.connection.use { conn ->
-            conn.prepareStatement(
-                "INSERT INTO users (user_id, api_key_hash) VALUES (?, ?)"
-            ).use { ps ->
-                ps.setString(1, userId)
-                ps.setString(2, keyHash)
-                ps.executeUpdate()
-            }
-        }
-
-        // One SDK session does both: flip the wallet to private mode (so
-        // transfers don't leak the master identity pubkey) and register the
-        // webhook. Best-effort — if the SSP can't reach PUBLIC_BASE_URL or
-        // the private-mode RPC fails, we still return the user. Private
-        // mode persists server-side, so a later sync inherits it.
-        val webhookId: String? = try {
+        val webhookId: String = try {
             sdk.withUser(userId) {
                 it.updateUserSettings(
                     UpdateUserSettingsRequest(
@@ -75,17 +62,23 @@ fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig) {
                 ).webhookId
             }
         } catch (e: Exception) {
-            log.warn("user provisioning (private mode / webhook) failed for {}: {}", userId, e.message)
-            null
+            log.warn("user provisioning failed for {}: {}", userId, e.message)
+            call.respondError(
+                HttpStatusCode.BadGateway,
+                ErrorCodes.UPSTREAM_UNAVAILABLE,
+                "user provisioning failed, please retry",
+            )
+            return@post
         }
 
-        if (webhookId != null) {
-            ds.connection.use { conn ->
-                conn.prepareStatement("UPDATE users SET webhook_id = ? WHERE user_id = ?").use { ps ->
-                    ps.setString(1, webhookId)
-                    ps.setString(2, userId)
-                    ps.executeUpdate()
-                }
+        ds.connection.use { conn ->
+            conn.prepareStatement(
+                "INSERT INTO users (user_id, api_key_hash, webhook_id) VALUES (?, ?, ?)"
+            ).use { ps ->
+                ps.setString(1, userId)
+                ps.setString(2, keyHash)
+                ps.setString(3, webhookId)
+                ps.executeUpdate()
             }
         }
 
