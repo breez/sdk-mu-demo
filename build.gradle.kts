@@ -41,12 +41,12 @@ dependencies {
     implementation("ch.qos.logback:logback-classic:1.5.6")
     implementation("net.logstash.logback:logstash-logback-encoder:7.4")
 
-    // DB: JDBC pool + migrations. The SDK manages its own MySQL schema
+    // DB: JDBC pool + migrations. The SDK manages its own Postgres schema
     // via the shared context; Flyway/HikariCP here are app-only.
     implementation("com.zaxxer:HikariCP:5.1.0")
-    implementation("com.mysql:mysql-connector-j:9.1.0")
+    implementation("org.postgresql:postgresql:42.7.4")
     implementation("org.flywaydb:flyway-core:10.20.1")
-    implementation("org.flywaydb:flyway-mysql:10.20.1")
+    implementation("org.flywaydb:flyway-database-postgresql:10.20.1")
 }
 
 application {

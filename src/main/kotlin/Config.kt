@@ -7,7 +7,7 @@ import java.net.URI
  */
 data class AppConfig(
     val network: Network,
-    val mysqlUrl: String,
+    val databaseUrl: String,
     val masterSecret: String,
     val webhookSecret: String,
     val publicBaseUrl: String,
@@ -17,7 +17,7 @@ data class AppConfig(
     val corsOrigins: List<String>,
 ) {
     /** Hikari + Flyway want a jdbc:* URL with credentials supplied separately. */
-    val mysql: MysqlDsn = MysqlDsn.parse(mysqlUrl)
+    val postgres: PostgresDsn = PostgresDsn.parse(databaseUrl)
 
     companion object {
         fun fromEnv(env: (String) -> String? = System::getenv): AppConfig {
@@ -39,7 +39,7 @@ data class AppConfig(
 
             return AppConfig(
                 network = network,
-                mysqlUrl = required("MYSQL_URL"),
+                databaseUrl = required("DATABASE_URL"),
                 masterSecret = required("MASTER_SECRET"),
                 webhookSecret = required("WEBHOOK_SECRET"),
                 publicBaseUrl = required("PUBLIC_BASE_URL").trimEnd('/'),
@@ -56,32 +56,33 @@ data class AppConfig(
 }
 
 /**
- * Parsed `mysql://user:pass@host:port/db` (or `jdbc:mysql://…`). The SDK
- * accepts the original URL string; Hikari + Flyway need the JDBC form plus
+ * Parsed `postgres://user:pass@host:port/db` (or `postgresql://…` / `jdbc:postgresql://…`).
+ * The SDK accepts the original URL string; Hikari + Flyway need the JDBC form plus
  * username/password fields broken out.
  */
-data class MysqlDsn(
+data class PostgresDsn(
     val jdbcUrl: String,
     val user: String,
     val password: String,
 ) {
     companion object {
-        fun parse(raw: String): MysqlDsn {
+        fun parse(raw: String): PostgresDsn {
             val noJdbc = raw.removePrefix("jdbc:")
             val uri = URI(noJdbc)
-            require(uri.scheme.equals("mysql", ignoreCase = true)) {
-                "MYSQL_URL scheme must be mysql:// (was ${uri.scheme})"
+            require(uri.scheme.equals("postgres", ignoreCase = true) ||
+                uri.scheme.equals("postgresql", ignoreCase = true)) {
+                "DATABASE_URL scheme must be postgres:// or postgresql:// (was ${uri.scheme})"
             }
             val ui = uri.userInfo?.split(':', limit = 2) ?: emptyList()
             val user = ui.getOrNull(0)?.let { java.net.URLDecoder.decode(it, Charsets.UTF_8) } ?: ""
             val pass = ui.getOrNull(1)?.let { java.net.URLDecoder.decode(it, Charsets.UTF_8) } ?: ""
-            val host = uri.host ?: error("MYSQL_URL missing host")
-            val port = if (uri.port < 0) 3306 else uri.port
+            val host = uri.host ?: error("DATABASE_URL missing host")
+            val port = if (uri.port < 0) 5432 else uri.port
             val db = uri.path.orEmpty().trimStart('/')
-            require(db.isNotEmpty()) { "MYSQL_URL missing /database path" }
+            require(db.isNotEmpty()) { "DATABASE_URL missing /database path" }
             val query = uri.rawQuery?.let { "?$it" } ?: ""
-            return MysqlDsn(
-                jdbcUrl = "jdbc:mysql://$host:$port/$db$query",
+            return PostgresDsn(
+                jdbcUrl = "jdbc:postgresql://$host:$port/$db$query",
                 user = user,
                 password = pass,
             )

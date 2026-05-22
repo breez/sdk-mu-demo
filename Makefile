@@ -30,7 +30,7 @@ ifneq (,$(wildcard ./.env))
 	export
 endif
 
-.PHONY: help setup build run up mysql-up mysql-wait logs down clean
+.PHONY: help setup build run up postgres-up postgres-wait logs down clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -46,27 +46,27 @@ endif
 build: ## Compile the app
 	$(GRADLE) build
 
-mysql-up: ## Start the MySQL container in the background (idempotent)
-	docker compose up -d mysql
-	@$(MAKE) mysql-wait
+postgres-up: ## Start the Postgres container in the background (idempotent)
+	docker compose up -d postgres
+	@$(MAKE) postgres-wait
 
-mysql-wait:
-	@echo "Waiting for MySQL to accept connections…"
+postgres-wait:
+	@echo "Waiting for Postgres to accept connections…"
 	@for i in $$(seq 1 60); do \
-	  if docker compose exec -T mysql mysqladmin ping -uroot -ppassword --silent 2>/dev/null; then \
-	    echo "MySQL ready."; exit 0; \
+	  if docker compose exec -T postgres pg_isready -U postgres -d sdk_mu_demo >/dev/null 2>&1; then \
+	    echo "Postgres ready."; exit 0; \
 	  fi; sleep 1; \
-	done; echo "MySQL did not become ready in time" >&2; exit 1
+	done; echo "Postgres did not become ready in time" >&2; exit 1
 
-run: build ## Run the server in the foreground (assumes mysql-up)
+run: build ## Run the server in the foreground (assumes postgres-up)
 	$(GRADLE) run --console=plain
 
-up: mysql-up run ## docker compose up (mysql) + run the app in the foreground
+up: postgres-up run ## docker compose up (postgres) + run the app in the foreground
 
-logs: ## Tail mysql logs
-	docker compose logs -f mysql
+logs: ## Tail postgres logs
+	docker compose logs -f postgres
 
-down: ## Stop and remove the mysql container (keeps the named volume)
+down: ## Stop and remove the postgres container (keeps the named volume)
 	docker compose down
 
 clean: ## Remove build artifacts

@@ -11,9 +11,10 @@ client on Vercel) so a team can actually try it.
    `SdkContext`, per-request `build → op → disconnect`, no lock).
 2. Full client-facing API: send + receive over Bolt11 + on-chain,
    payment history, deposits. Enough to back a real wallet UI.
-3. Deployable end-to-end with free-tier infra. `flyctl deploy` for
-   the server, `vercel deploy` for the client. One repo.
-4. Local dev: `docker compose up` brings up MySQL + regtest deps + app.
+3. Deployable end-to-end on managed infra. `flyctl deploy` for the
+   server (always-on), `vercel deploy` for the client, Supabase for
+   Postgres. One repo.
+4. Local dev: `docker compose up` brings up Postgres + regtest deps + app.
 5. SDK source toggle: published artifact by default; local build
    from a side-by-side `spark-sdk/` via one env var.
 
@@ -47,19 +48,19 @@ client on Vercel) so a team can actually try it.
                                         │ JDBC
                                         ▼
                                   ┌──────────┐
-                                  │  MySQL   │  (SDK + app schemas, same DB)
+                                  │ Postgres │  (SDK + app schemas, same DB)
                                   └──────────┘
 ```
 
 One process. One shared `SdkContext` built at boot, threaded into
 every `SdkBuilder`. One JDBC pool, used by both the SDK and the app
-schema. Stateless app layer; all durable state in MySQL.
+schema. Stateless app layer; all durable state in Postgres.
 
 ## Stack
 
 - Kotlin 2.1, JDK 17, Gradle KTS, single module.
 - Ktor 2.x server (Netty engine).
-- MySQL 8 via HikariCP + Flyway migrations.
+- Postgres 16 via HikariCP + Flyway migrations.
 - `kotlinx-serialization-json` for wire format.
 - `logback-classic` for logs (JSON layout in prod, pretty in dev).
 - SDK: `technology.breez.spark:breez-sdk-spark-kmp-jvm:<version>` from
@@ -71,8 +72,8 @@ schema. Stateless app layer; all durable state in MySQL.
 ```kotlin
 // boot
 val sharedCtx = newSharedSdkContext(SharedSdkContextParams(
-    mysqlUrl = env("MYSQL_URL"),
-    // HTTP client, operator gRPC, Breez gRPC, MySQL pool all live here
+    databaseUrl = env("DATABASE_URL"),
+    // HTTP client, operator gRPC, Breez gRPC, Postgres pool all live here
 ))
 
 // per request
@@ -201,6 +202,26 @@ safe to repeat). We don't dedupe events at our boundary in v1.
 across all users. Simpler. A real prod deployment might prefer a
 per-user secret stored in the `users` table; called out in README.
 
+## Background tasks
+
+The always-on JVM hosts in-process scheduled work alongside the HTTP
+server. Each task is a coroutine launched at boot, walking users with
+a concurrency cap (semaphore) and jittered per-user offsets so a fleet
+of users doesn't form a thundering herd. State (last-run-at per user,
+per task) lives in the app schema.
+
+v1.1 candidates:
+
+- **Reconciliation sync.** Hourly `syncWallet()` per user. Belt and
+  suspenders against missed webhooks; also catches any SSP-side state
+  the SDK didn't get pushed.
+- **Leaf optimization.** Periodic `optimize()` per user to consolidate
+  leaves. Cadence per the SDK's recommendation.
+
+Tasks share the same `SharedSdkContext` as request handlers — same
+pool, same gRPC channels. Per-user work uses the same `withUser`
+helper as the HTTP routes.
+
 ## Data model
 
 App-owned tables, kept separate from SDK tables (which live in the same
@@ -211,10 +232,10 @@ DB but are SDK-managed and we never touch them):
 CREATE TABLE users (
     user_id        VARCHAR(64)  PRIMARY KEY,             -- ULID
     api_key_hash   CHAR(64)     NOT NULL UNIQUE,         -- SHA-256(api_key)
-    created_at     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    webhook_id     VARCHAR(64),                          -- from SDK, for unregister
-    INDEX idx_users_created_at (created_at)
+    created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    webhook_id     VARCHAR(64)                           -- from SDK, for unregister
 );
+CREATE INDEX idx_users_created_at ON users (created_at);
 ```
 
 That's the entire app schema for v1. Everything else (payments,
@@ -240,7 +261,7 @@ All via env. `.env.example` committed. Production: Fly secrets.
 | Var | Required | Default | Notes |
 |---|---|---|---|
 | `NETWORK` | yes | — | `mainnet` \| `regtest` |
-| `MYSQL_URL` | yes | — | `mysql://user:pass@host:3306/db` |
+| `DATABASE_URL` | yes | — | `postgres://user:pass@host:5432/db` |
 | `MASTER_SECRET` | yes | — | Hex or ASCII; seed-derivation input |
 | `WEBHOOK_SECRET` | yes | — | HMAC secret given to SSP at registration |
 | `PUBLIC_BASE_URL` | yes | — | E.g. `https://sdk-mu-demo.fly.dev` |
@@ -253,7 +274,7 @@ All via env. `.env.example` committed. Production: Fly secrets.
 
 ```
 make setup            # one-time per branch
-make up               # docker compose up (mysql + app)
+make up               # docker compose up (postgres + app)
 make logs             # tail
 make down             # stop
 ```
@@ -286,16 +307,18 @@ container image bundles the .so at the right location.
   native `.so` from the KMP artifact, sets `jna.library.path`. Runs
   `java -jar app.jar`.
 - Secrets via `flyctl secrets set` for `MASTER_SECRET`,
-  `WEBHOOK_SECRET`, `MYSQL_URL`, `BREEZ_API_KEY`.
-- Free tier sleeps after idle → ~5–10s cold start. README warns.
+  `WEBHOOK_SECRET`, `DATABASE_URL`, `BREEZ_API_KEY`.
+- `min_machines_running = 1`, `auto_stop_machines = "off"`. The JVM
+  hosts background tasks (reconciliation sync, leaf optimization)
+  that need a continuously running process.
 
 ### Database
 
-- **Default (deployed):** TiDB Cloud Serverless (MySQL-compatible,
-  free tier). v1 sanity test: confirm the SDK works against TiDB
-  (it's wire-compatible but worth a once-over).
-- **Fallback:** MySQL 8 container on a Fly volume, single VM.
-- **Local:** `docker compose` brings up mysql:8.0.
+- **Default (deployed):** Supabase (managed Postgres, free tier). Set
+  `DATABASE_URL` to the connection string from the Supabase project
+  settings. Any reachable Postgres 14+ works — DO Managed DB, RDS,
+  Neon, self-hosted, etc.
+- **Local:** `docker compose` brings up postgres:16.
 
 ### Client: Vercel
 
@@ -332,7 +355,7 @@ Plain CSS / Tailwind, no design system. Wallet UX, not product UX.
 ├── DESIGN.md                  (this file)
 ├── README.md                  (tutorial / how to run)
 ├── Makefile                   (setup, up, down, etc.)
-├── docker-compose.yml         (mysql + app for local)
+├── docker-compose.yml         (postgres + app for local)
 ├── fly.toml
 ├── Dockerfile
 ├── .env.example
@@ -390,29 +413,22 @@ Plain CSS / Tailwind, no design system. Wallet UX, not product UX.
   works locally, payments visible after webhook fires.
 
 **Phase 3 — deploy & client.**
-- Dockerfile, fly.toml, Fly deploy. TiDB or MySQL-on-Fly. Next.js
-  client with all pages. Vercel config. README rewritten as a
+- Dockerfile, fly.toml, Fly deploy. Supabase as the managed Postgres.
+  Next.js client with all pages. Vercel config. README rewritten as a
   tutorial: clone → curl → deploy. ⟶ End state: team uses the
   deployed URL, sends/receives over both methods, history shows up.
 
 ## Open questions / TBDs
 
-1. **TiDB compatibility.** Does the SDK's MySQL path work against TiDB
-   Serverless? Suspect yes (wire-compatible), needs a 30-min test.
-   Fallback is MySQL-on-Fly volume.
-2. **Native lib in the Docker image.** The KMP JAR includes the `.so`
+1. **Native lib in the Docker image.** The KMP JAR includes the `.so`
    under `linux-x86-64/`. Need to confirm JNA picks it up from the
    classpath without us setting `jna.library.path`. If not, the
    Dockerfile extracts it and sets the path.
-3. **Webhook delivery to Fly while it's asleep.** SSP retries on
-   failure → fine. Sleep period might lose webhooks if retries
-   exhaust. Mitigation: a periodic `syncWallet()` cron for all users
-   as a backstop. Defer to v1.1.
-4. **`PUBLIC_BASE_URL` chicken-and-egg.** Webhook URL must be public
+2. **`PUBLIC_BASE_URL` chicken-and-egg.** Webhook URL must be public
    at registration time. Local dev needs a tunnel (`ngrok` /
    `cloudflared`). README documents this.
-5. **`POST /users` open-registration abuse.** Spamming creates rows
+3. **`POST /users` open-registration abuse.** Spamming creates rows
    + registers webhooks (= SSP-side state). Add a simple per-IP rate
    limit (Ktor + in-memory) in Phase 3 alongside CORS.
-6. **Mainnet `BREEZ_API_KEY` for the demo.** Out-of-band — we'll need
+4. **Mainnet `BREEZ_API_KEY` for the demo.** Out-of-band — we'll need
    one before deploy.

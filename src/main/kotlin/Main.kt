@@ -119,13 +119,13 @@ fun main(): Unit = runBlocking {
 
 private fun buildDataSource(cfg: AppConfig): HikariDataSource {
     val hc = HikariConfig().apply {
-        jdbcUrl = cfg.mysql.jdbcUrl
-        username = cfg.mysql.user
-        password = cfg.mysql.password
+        jdbcUrl = cfg.postgres.jdbcUrl
+        username = cfg.postgres.user
+        password = cfg.postgres.password
         maximumPoolSize = 10
         minimumIdle = 1
         poolName = "sdk-mu-demo-app"
-        // The SDK has its own MySQL pool (via SdkContext). This one is
+        // The SDK has its own Postgres pool (via SdkContext). This one is
         // app-only — auth lookups, /readyz pings.
     }
     return HikariDataSource(hc)

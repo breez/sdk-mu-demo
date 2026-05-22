@@ -1,24 +1,24 @@
-# Phase 1: MySQL only. The app runs on the host via `./gradlew run` (see
+# Phase 1: Postgres only. The app runs on the host via `./gradlew run` (see
 # Makefile). Containerised app + Dockerfile land in Phase 3.
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: sdk-mu-demo-mysql
+  postgres:
+    image: postgres:16
+    container_name: sdk-mu-demo-postgres
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: sdk_mu_demo
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: sdk_mu_demo
     ports:
       # Host port overridable so the demo can coexist with another local
-      # MySQL on :3306. Container port stays 3306; URL is in MYSQL_URL.
-      - "${MYSQL_HOST_PORT:-3306}:3306"
+      # Postgres on :5432. Container port stays 5432; URL is in DATABASE_URL.
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
-      - sdk_mu_demo_mysql:/var/lib/mysql
+      - sdk_mu_demo_postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-uroot", "-ppassword", "--silent"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sdk_mu_demo"]
       interval: 5s
       timeout: 3s
       retries: 20
 
 volumes:
-  sdk_mu_demo_mysql:
+  sdk_mu_demo_postgres:

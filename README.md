@@ -18,7 +18,7 @@ model, open questions). This README is the **how**.
                                         │ JDBC          operators / SSP / chain
                                         ▼
                                   ┌──────────┐
-                                  │  MySQL   │
+                                  │ Postgres │
                                   └──────────┘
 ```
 
@@ -32,7 +32,7 @@ Prereqs: JDK 17, Docker, GNU make.
 git clone <this repo> && cd sdk-mu-demo
 cp .env.example .env       # edit MASTER_SECRET, WEBHOOK_SECRET, BREEZ_API_KEY
 make setup                 # downloads gradle, validates env
-make mysql-up              # boots MySQL 8 in docker
+make postgres-up           # boots Postgres 16 in docker
 make run                   # ./gradlew run — Ktor on :8080
 
 # In another terminal:
@@ -168,13 +168,14 @@ Then:
 flyctl launch --no-deploy --copy-config --name <your-app>
 flyctl secrets set \
   MASTER_SECRET="…"      WEBHOOK_SECRET="…" \
-  MYSQL_URL="mysql://USER:PASS@HOST:4000/DB" \
+  DATABASE_URL="postgres://USER:PASS@HOST:5432/DB" \
   BREEZ_API_KEY="…"      PUBLIC_BASE_URL="https://<your-app>.fly.dev"
 flyctl deploy
 ```
 
-Database: TiDB Serverless (MySQL-compatible, free tier) or any reachable
-MySQL 8. Fallback: a MySQL container on a Fly volume.
+Database: Supabase (managed Postgres, free tier) — create a project,
+copy the connection string from project settings, paste as `DATABASE_URL`.
+Any reachable Postgres 14+ works (DO Managed DB, RDS, Neon, self-hosted).
 
 Network: `NETWORK=mainnet` is the deploy default. Real sats. Use
 `regtest` for the demo.
