@@ -22,6 +22,15 @@ KMP_CLI_DIR := $(SDK_PATH)/crates/breez-sdk/bindings/examples/cli/langs/kotlin-m
 # Export so the Gradle build (build.gradle.kts) sees it for jna.library.path.
 export SDK_PATH
 
+# When LOCAL_SDK=1, switch the SDK dep to the in-tree libraryVersion
+# emitted by the local build (currently `0.1.0` in spark-sdk's
+# gradle.properties). Default leaves SDK_VERSION unset → build.gradle.kts
+# falls back to its baked-in published version from mvn.breez.technology.
+ifeq ($(LOCAL_SDK),1)
+SDK_VERSION ?= 0.1.0
+export SDK_VERSION
+endif
+
 # Load .env if present, exporting every var. Without this, `make run` would
 # inherit only the parent shell's env — and the typical workflow is
 # `cp .env.example .env`, edit, `make run`. Sourced before recipes execute.

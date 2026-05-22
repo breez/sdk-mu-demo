@@ -1,11 +1,8 @@
 # Multi-stage Linux x86-64 build for Fly.io / generic Linux deploys.
 #
-# Stage 1: build the JAR with Gradle.
-# Stage 2: thin JRE runtime image. The native `libbreez_sdk_spark_bindings.so`
-#          must be supplied at build time at `./libs/libbreez_sdk_spark_bindings.so`
-#          — the published `breez-sdk-spark-kmp-jvm:0.1.0` artifact does **not**
-#          bundle a Linux .so (only host-arch). README documents how to obtain it
-#          (run the LOCAL_SDK build on a Linux host or use cross).
+# Stage 1 pulls the SDK from mvn.breez.technology; the published KMP-jvm
+# artifact bundles native libs for darwin + linux on both arches, so the
+# image needs no per-host staging. Stage 2 is a thin JRE runtime.
 
 FROM gradle:8.4-jdk17 AS app-builder
 WORKDIR /work
@@ -13,8 +10,6 @@ WORKDIR /work
 COPY settings.gradle.kts build.gradle.kts gradle.properties ./
 COPY gradle ./gradle
 COPY gradlew gradlew.bat ./
-# Stage the local Maven mirror for the KMP-jvm artifact (see README).
-COPY libs/m2 ./libs/m2
 # Prime the dependency graph before sources change.
 RUN ./gradlew --no-daemon dependencies > /dev/null 2>&1 || true
 COPY src ./src
@@ -31,11 +26,7 @@ RUN apt-get update \
 # Application jar.
 COPY --from=app-builder /work/build/libs/sdk-mu-demo-0.1.0.jar /app/app.jar
 
-# Native SDK lib. Expected to live at ./libs/ in the build context. JNA loads
-# it via `jna.library.path` (set in JAVA_OPTS below). See README "Native lib".
-COPY libs/libbreez_sdk_spark_bindings.so /app/libs/libbreez_sdk_spark_bindings.so
-
-ENV JAVA_OPTS="-Djna.library.path=/app/libs -XX:MaxRAMPercentage=75"
+ENV JAVA_OPTS="-XX:MaxRAMPercentage=75"
 ENV PORT=8080
 EXPOSE 8080
 

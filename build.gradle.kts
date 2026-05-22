@@ -9,20 +9,26 @@ version = "0.1.0"
 
 repositories {
     // mavenLocal first so `make setup LOCAL_SDK=1` (which publishes the
-    // KMP bindings to ~/.m2) wins over the remote artifact.
+    // KMP bindings to ~/.m2) wins over the remote artifact when their
+    // versions match.
     mavenLocal()
-    // `libs/m2` is a per-host staged mirror of the KMP-jvm artifact. The
-    // published 0.1.0 isn't (yet) on `mvn.breez.technology`, so this is
-    // the path Docker / clean clones resolve through. See README "Deploy".
+    // `libs/m2` is an optional per-host staged mirror for the LOCAL_SDK
+    // path (useful when Docker can't reach the host's `~/.m2`).
     maven { url = uri("libs/m2") }
     mavenCentral()
     maven { url = uri("https://mvn.breez.technology/releases") }
 }
 
+// SDK version. Default is a published artifact from mvn.breez.technology
+// (ships native libs for darwin + linux on both arches). Override via
+// `-PsdkVersion=…` or the `SDK_VERSION` env var. The Makefile flips this
+// to the in-tree `libraryVersion=0.1.0` when `LOCAL_SDK=1`.
+val sdkVersion: String = (findProperty("sdkVersion") as? String)
+    ?: System.getenv("SDK_VERSION")
+    ?: "0.15.0"
+
 dependencies {
-    // SDK — version must match libraryVersion in
-    // spark-sdk/crates/breez-sdk/bindings/langs/kotlin-multiplatform/gradle.properties.
-    implementation("technology.breez.spark:breez-sdk-spark-kmp-jvm:0.1.0")
+    implementation("technology.breez.spark:breez-sdk-spark-kmp-jvm:$sdkVersion")
     implementation("com.ionspin.kotlin:bignum:0.3.10")
     implementation("net.java.dev.jna:jna:5.18.0")
 

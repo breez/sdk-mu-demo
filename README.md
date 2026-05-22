@@ -39,18 +39,25 @@ make run                   # ./gradlew run — Ktor on :8080
 ./test/smoke.sh            # POST /users; GET /info
 ```
 
-Defaults target the Breez Spark regtest network. To build the SDK from a
-side-by-side `spark-sdk/` checkout (e.g. while iterating on the Rust
-side):
+Defaults target the Breez Spark regtest network.
+
+#### Iterating on the SDK (`LOCAL_SDK=1`)
+
+To build the SDK from a side-by-side `spark-sdk/` checkout (e.g. while
+hacking on the Rust side), set `LOCAL_SDK=1`:
 
 ```bash
 make setup LOCAL_SDK=1                 # SDK_PATH defaults to ../spark-sdk
 make setup LOCAL_SDK=1 SDK_PATH=/abs/path
+make run    LOCAL_SDK=1                # gradle build resolves against ~/.m2
 ```
 
-This builds the Rust dylib (`target/release/libbreez_sdk_spark_bindings.{dylib,so}`)
-and publishes the KMP bindings to `mavenLocal`; the Gradle build's
-`repositories` block lists `mavenLocal` first so the local artifact wins.
+This builds the Rust dylib (`target/release/libbreez_sdk_spark_bindings.{dylib,so}`),
+publishes the KMP bindings to `mavenLocal` under the SDK's in-tree
+`libraryVersion` (currently `0.1.0`), and flips `SDK_VERSION` so the
+Gradle build picks up that local artifact instead of the published one.
+The Docker image is built against the published SDK only; iterate via
+`make run`.
 
 #### Webhooks locally
 
@@ -126,44 +133,6 @@ curl -sS -H "$H" $BASE/users/$user_id/info
 
 ### 3. Deploy the server (Fly.io)
 
-The Docker image needs two things staged into `./libs/` first, neither
-committed to git:
-
-**a) The Linux `.so` for the SDK.** The published `breez-sdk-spark-kmp-jvm:0.1.0`
-JAR only ships the host arch's native lib (e.g. `darwin-aarch64/.dylib`).
-A Linux container needs `libbreez_sdk_spark_bindings.so` built for
-`x86_64-unknown-linux-gnu`. The fast path on macOS is to build it inside
-a Linux Rust container:
-
-```bash
-mkdir -p libs
-docker run --rm \
-  -v $(pwd)/../spark-sdk:/src -v /tmp/cargo-target:/src/target \
-  -w /src --platform linux/amd64 rust:1-bookworm \
-  bash -lc 'apt-get update -qq && apt-get install -y -qq protobuf-compiler pkg-config libssl-dev clang && \
-            cargo build --release -p breez-sdk-bindings'
-cp /tmp/cargo-target/release/libbreez_sdk_spark_bindings.so libs/
-```
-
-(~3 min on Apple Silicon. Adjust `../spark-sdk` to your checkout. On a
-Linux host, `make setup LOCAL_SDK=1` is enough; the `.so` ends up at
-`$SDK_PATH/target/release/`.)
-
-**b) The KMP-jvm Maven artifact**, until it's published on
-`mvn.breez.technology`. Mirror it from your local `~/.m2` (populated by
-`make setup LOCAL_SDK=1`) into the build context:
-
-```bash
-mkdir -p libs/m2/technology/breez/spark/breez-sdk-spark-kmp-jvm/0.1.0
-cp ~/.m2/repository/technology/breez/spark/breez-sdk-spark-kmp-jvm/0.1.0/breez-sdk-spark-kmp-jvm-0.1.0.{jar,pom} \
-   libs/m2/technology/breez/spark/breez-sdk-spark-kmp-jvm/0.1.0/
-```
-
-(Drop the `.module` file — it points at a parent module that isn't
-published; Gradle falls back to the POM if the module is absent.)
-
-Then:
-
 ```bash
 flyctl launch --no-deploy --copy-config --name <your-app>
 flyctl secrets set \
@@ -172,6 +141,10 @@ flyctl secrets set \
   BREEZ_API_KEY="…"      PUBLIC_BASE_URL="https://<your-app>.fly.dev"
 flyctl deploy
 ```
+
+The published `breez-sdk-spark-kmp-jvm` JAR bundles native libs for
+darwin + linux on both arches, so no per-host staging is needed — the
+Dockerfile pulls the SDK from `mvn.breez.technology` and goes.
 
 Database: Supabase (managed Postgres, free tier) — create a project,
 copy the connection string from project settings, paste as `DATABASE_URL`.
@@ -209,7 +182,7 @@ Pages:
 Spark addresses + Spark invoices, LNURL / lightning addresses, token
 payments, external signer integration, HA / Prometheus / alerting, KYC
 or billing, account deletion. See `DESIGN.md` "Non-goals" for the full
-list and `PLAN.md` "Deferred" for things slated for v1.1.
+list.
 
 ## Project layout
 

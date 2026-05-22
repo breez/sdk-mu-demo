@@ -289,13 +289,15 @@ make setup LOCAL_SDK=1 SDK_PATH=/path
 
 When `LOCAL_SDK=1`: cd into `$SDK_PATH`, run its `build-release` +
 `install-uniffi-bindgen-gobley`, generate KMP bindings, publish to
-`mavenLocal`, copy the native lib into the JVM resources dir. The
-Gradle build's `repositories` block already has `mavenLocal()` first,
-so it picks up the local artifact automatically.
+`mavenLocal`. The Makefile flips `SDK_VERSION` to match the local
+artifact's `libraryVersion` (currently `0.1.0`); Gradle's repository
+block lists `mavenLocal()` first, so the local artifact wins.
 
-Native lib path at runtime: JNA loads from
-`jna.library.path` if set; the local-build path sets it; the
-container image bundles the .so at the right location.
+Native lib at runtime: the published KMP JAR bundles a `.so` per arch
+(`darwin-aarch64`, `darwin-x86-64`, `linux-aarch64`, `linux-x86-64`)
+and JNA loads it from the classpath. The `LOCAL_SDK=1` path emits only
+host-arch native libs, so the `jna.library.path` runtime hint set on
+the Gradle `run` task is what makes that path work.
 
 ## Deploy
 
@@ -366,6 +368,7 @@ Plain CSS / Tailwind, no design system. Wallet UX, not product UX.
 │   ├── main/kotlin/
 │   │   ├── Main.kt
 │   │   ├── Config.kt
+│   │   ├── Errors.kt          (envelope + stable codes)
 │   │   ├── SharedContext.kt
 │   │   ├── Sdk.kt             (withUser helper)
 │   │   ├── Auth.kt            (api-key middleware)
@@ -375,6 +378,7 @@ Plain CSS / Tailwind, no design system. Wallet UX, not product UX.
 │   │   │   ├── Send.kt        (prepare + confirm)
 │   │   │   ├── Receive.kt
 │   │   │   ├── Payments.kt    (list + get)
+│   │   │   ├── PaymentDto.kt  (shared payment serialization)
 │   │   │   ├── Deposits.kt
 │   │   │   └── Webhooks.kt
 │   │   └── Health.kt

@@ -16,6 +16,9 @@ out/
 .env.local
 .env.*.local
 
+# Local working-state doc — not part of the shipped reference.
+PLAN.md
+
 # Native SDK lib staged for `docker build` — see README "Deploy the server".
 # 50MB binary; build it per-host with cross or the Rust toolchain, don't commit.
 libs/
