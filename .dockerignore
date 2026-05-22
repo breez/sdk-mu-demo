@@ -1,0 +1,13 @@
+.git
+.gradle
+build
+out
+client/node_modules
+client/.next
+*.iml
+.idea
+.vscode
+.env
+.env.*
+!.env.example
+test

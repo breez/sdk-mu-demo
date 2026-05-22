@@ -1,0 +1,36 @@
+# Fly.io app config. Replace `app` and `primary_region` for your deployment.
+# See README for `flyctl secrets set` commands (MASTER_SECRET, WEBHOOK_SECRET,
+# MYSQL_URL, BREEZ_API_KEY, PUBLIC_BASE_URL).
+
+app = "sdk-mu-demo"
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  NETWORK = "mainnet"
+  LOG_FORMAT = "json"
+  # PUBLIC_BASE_URL, CORS_ORIGINS, etc. should be set via `flyctl secrets set`.
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Free tier — let the VM sleep when idle. Webhook deliveries from the SSP
+  # will wake it; they retry on failure, so the cold-start window is fine.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/readyz"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512

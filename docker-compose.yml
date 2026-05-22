@@ -1,0 +1,24 @@
+# Phase 1: MySQL only. The app runs on the host via `./gradlew run` (see
+# Makefile). Containerised app + Dockerfile land in Phase 3.
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: sdk-mu-demo-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: sdk_mu_demo
+    ports:
+      # Host port overridable so the demo can coexist with another local
+      # MySQL on :3306. Container port stays 3306; URL is in MYSQL_URL.
+      - "${MYSQL_HOST_PORT:-3306}:3306"
+    volumes:
+      - sdk_mu_demo_mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-uroot", "-ppassword", "--silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  sdk_mu_demo_mysql:

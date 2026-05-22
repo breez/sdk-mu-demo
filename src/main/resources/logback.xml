@@ -1,0 +1,24 @@
+<configuration>
+    <!--
+      Two appenders, selected at runtime by LOG_FORMAT (`pretty` | `json`).
+      Default `pretty` for local; set `json` in prod for structured ingest.
+    -->
+    <property name="LOG_APPENDER" value="${LOG_FORMAT:-pretty}"/>
+
+    <appender name="pretty" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{32} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <appender name="json" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeContext>false</includeContext>
+            <includeMdcKeyName>userId</includeMdcKeyName>
+        </encoder>
+    </appender>
+
+    <root level="${LOG_LEVEL:-info}">
+        <appender-ref ref="${LOG_APPENDER}"/>
+    </root>
+</configuration>
