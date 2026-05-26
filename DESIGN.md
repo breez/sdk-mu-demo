@@ -141,6 +141,9 @@ POST   /webhooks/sdk/{user_id}              # called by Spark SSP
        headers: X-Spark-Signature
        body: see below
 
+GET    /users/{id}/events                   # WebSocket upgrade; auth: ?api_key=
+       → SdkEvent stream
+
 GET    /healthz                             # liveness (always 200)
 GET    /readyz                              # readiness (db ping + shared-ctx ok)
 ```
@@ -202,25 +205,45 @@ safe to repeat). We don't dedupe events at our boundary in v1.
 across all users. Simpler. A real prod deployment might prefer a
 per-user secret stored in the `users` table; called out in README.
 
+## Client push (WebSocket)
+
+`GET /users/{id}/events` (WS upgrade, `?api_key=...` since browsers
+can't header-auth WS). Inside every `withUser`, an `EventListener`
+bridges `SdkEvent` to a per-user in-process `MutableSharedFlow`; WS
+subscribers drain it. Payment + deposit events flow live.
+
+Best-effort delivery. No replay. On (re)connect the client refetches
+`/info` + `/payments`, then trusts the stream.
+
+Single-process bus is enough for v1.1; multi-machine would swap in
+Redis pubsub / Postgres LISTEN-NOTIFY (same coordination story as the
+optimize queue).
+
 ## Background tasks
 
-The always-on JVM hosts in-process scheduled work alongside the HTTP
-server. Each task is a coroutine launched at boot, walking users with
-a concurrency cap (semaphore) and jittered per-user offsets so a fleet
-of users doesn't form a thundering herd. State (last-run-at per user,
-per task) lives in the app schema.
+The always-on JVM hosts a single in-memory optimize queue alongside the
+HTTP server. Webhook handler (after `syncWallet`) and send handler
+(after `sendPayment`) both enqueue `OptimizeJob(userId)`. A worker
+coroutine drains the queue and, per job, builds a per-user SDK via
+`withUser`, calls `startLeafOptimization`, and awaits the terminal
+`OptimizationEvent` (`Completed | Cancelled | Failed | Skipped`) via
+`addEventListener` before disconnecting. On timeout it calls
+`cancelLeafOptimization` to release reservations cleanly.
 
-v1.1 candidates:
+- **Dedup.** If a job for `userId` is already queued or in-flight, drop
+  the new one. A burst of payments shouldn't fire N optimizes.
+- **Concurrency cap.** Small semaphore (2–4) so a fleet-wide spike
+  doesn't pin the JVM.
+- **Auto-optimize disabled.** `LeafOptimizationConfig.autoEnabled =
+  false`. The SDK's built-in auto-optimizer relies on a long-lived
+  connection that the per-request `withUser` pattern doesn't provide.
 
-- **Reconciliation sync.** Hourly `syncWallet()` per user. Belt and
-  suspenders against missed webhooks; also catches any SSP-side state
-  the SDK didn't get pushed.
-- **Leaf optimization.** Periodic `optimize()` per user to consolidate
-  leaves. Cadence per the SDK's recommendation.
+In-memory is enough for v1: a process restart drops queued jobs; the
+next payment for that user re-enqueues. The worker uses the same
+`SharedSdkContext` and `withUser` helper as the HTTP routes.
 
-Tasks share the same `SharedSdkContext` as request handlers — same
-pool, same gRPC channels. Per-user work uses the same `withUser`
-helper as the HTTP routes.
+No reconciliation sync. The webhook delivery contract is the recovery
+path: we 5xx on failure, the SSP retries.
 
 ## Data model
 
@@ -311,8 +334,8 @@ the Gradle `run` task is what makes that path work.
 - Secrets via `flyctl secrets set` for `MASTER_SECRET`,
   `WEBHOOK_SECRET`, `DATABASE_URL`, `BREEZ_API_KEY`.
 - `min_machines_running = 1`, `auto_stop_machines = "off"`. The JVM
-  hosts background tasks (reconciliation sync, leaf optimization)
-  that need a continuously running process.
+  hosts an in-process optimize queue worker that drains opportunistically
+  after payments — needs a continuously running process.
 
 ### Database
 
