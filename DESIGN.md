@@ -65,7 +65,8 @@ schema. Stateless app layer; all durable state in Postgres.
 - `logback-classic` for logs (JSON layout in prod, pretty in dev).
 - SDK: `technology.breez.spark:breez-sdk-spark-kmp-jvm:<version>` from
   `mvn.breez.technology` (default) or `mavenLocal` (when `LOCAL_SDK=1`).
-- Client: Next.js 14 (App Router, client components only).
+- Client: Next.js 16 (App Router, client components only) + Tailwind v4,
+  styled to match the Glow web wallet.
 
 ## Server-mode integration (the core pattern)
 
@@ -398,16 +399,33 @@ the Gradle `run` task is what makes that path work.
 
 ## Client pages
 
+Single-page wallet UX modeled on the Glow web wallet. Two routes;
+send / receive / details are in-page bottom sheets, and the payment
+history lives in the wallet's scrollable list (no separate route).
+
 ```
-/signup       POST /users, store api_key in localStorage, redirect to /
-/             GET /info (balance) + GET /payments (recent 20)
-/send         input: payment_request, amount?  →  prepare → review → confirm
-/receive      tabs: bolt11 | onchain  →  POST /receive  →  show QR + paste
-/payments     paginated list, click row → detail
-/payments/:id GET /payments/{id}
+/signup   POST /users, store api_key in localStorage, redirect to /
+/         wallet: GET /info (balance) + GET /payments (history, paginated)
+          + GET /deposits/unclaimed. A collapsing balance header sits over
+          a scrollable transaction list; a bottom action bar opens:
+          - Send:    payment_request (+ amount?) → prepare → review →
+                     confirm → result. A non-terminal send waits on the
+                     WS event stream for the payment's terminal status,
+                     with a 60s GET /payments/{id} reconcile fallback.
+          - Receive: Lightning (amount/description → bolt11 invoice QR) |
+                     Bitcoin (POST /receive onchain → deposit address QR).
+          - Row tap: payment detail sheet, or deposit detail sheet with a
+                     claim action (POST /deposits/{outpoint}/claim) once
+                     the deposit is mature.
 ```
 
-Plain CSS / Tailwind, no design system. Wallet UX, not product UX.
+Dark "Glow" design language: Tailwind v4 with a ported theme
+(`app/globals.css`) — atmospheric gradient background, glassmorphism
+header, JetBrains Mono balance with the ₿ glyph, bottom sheets, and the
+Send (electric) / Receive (success) action buttons. The design system
+(icons, dialog primitives, bottom sheet, transaction list, QR) is a
+trimmed re-implementation of Glow's, matched to this server's feature
+set (sats only; no LNURL / Spark / fiat / contacts / passkeys).
 
 ## Project layout
 
@@ -419,7 +437,10 @@ High-level only — read the directories, not a file list that rots.
   event bus + bridge, …); `routes/` holds one file per endpoint group.
 - `src/main/resources/` — `logback.xml` and Flyway migrations
   (`db/migration/`).
-- `client/` — Next.js App Router. One folder per page under `app/`; the
-  typed API client and the events (WebSocket) hook under `lib/`.
+- `client/` — Next.js App Router. Routes under `app/` (`/` wallet,
+  `/signup`); the ported Glow design system under `components/` +
+  `contexts/`; the send/receive bottom-sheet flows under `features/`;
+  the typed API client, WebSocket hook and formatting helpers under
+  `lib/`.
 - Root — build (`*.gradle.kts`, `Makefile`, `gradlew`) and deploy
   (`docker-compose.yml`, `Dockerfile`, `fly.toml`, `.env.example`).

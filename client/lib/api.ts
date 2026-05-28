@@ -19,16 +19,38 @@ export class HttpError extends Error {
   }
 }
 
+// Default per-request timeout. Healthy calls finish in seconds (reads
+// ~1s, send/receive a few seconds, provisioning under ~15s); this bounds
+// the wait so a stalled upstream surfaces an error instead of an
+// indefinite spinner.
+const DEFAULT_TIMEOUT_MS = 45_000;
+
 async function call<T>(
   path: string,
-  init: RequestInit & { apiKey?: string } = {}
+  init: RequestInit & { apiKey?: string; timeoutMs?: number } = {}
 ): Promise<T> {
-  const { apiKey, headers, ...rest } = init;
+  const { apiKey, headers, timeoutMs = DEFAULT_TIMEOUT_MS, ...rest } = init;
   const h = new Headers(headers);
   if (apiKey) h.set("Authorization", `Bearer ${apiKey}`);
   if (init.body && !h.has("Content-Type")) h.set("Content-Type", "application/json");
 
-  const res = await fetch(`${BASE_URL}${path}`, { ...rest, headers: h });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, { ...rest, headers: h, signal: controller.signal });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") {
+      throw new HttpError(0, {
+        error: { code: "timeout", message: "The server took too long to respond. Please try again." },
+      });
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+
   let body: unknown = null;
   try {
     body = await res.json();

@@ -184,19 +184,25 @@ vercel deploy
 # Set NEXT_PUBLIC_API_BASE_URL → https://<your-fly-app>.fly.dev in project settings.
 ```
 
-The client is plain App Router + a typed `lib/api.ts`. No server actions,
-no API routes — the Ktor server is the only API surface. `api_key` lives
-in `localStorage` (fine for a demo; a real app would use httpOnly cookies).
+The client is App Router + a typed `lib/api.ts`. No server actions, no
+API routes — the Ktor server is the only API surface. `api_key` lives in
+`localStorage` (fine for a demo; a real app would use httpOnly cookies).
 
-Pages:
+Single-page wallet UX modeled on the Glow web wallet (dark glassmorphism
+theme, Tailwind v4). Two routes; everything else is an in-page bottom
+sheet:
 
 ```
-/signup       POST /users, save api_key, redirect /
-/             balance + recent 20 payments
-/send         paste invoice/address → prepare → review → confirm
-/receive      bolt11 | onchain → QR + paste
-/payments     paginated list
-/payments/:id detail view
+/signup   POST /users, save api_key, redirect /
+/         wallet: balance (GET /info) + payment history (GET /payments,
+          paginated) + unclaimed deposits. Bottom bar opens sheets:
+          · Send    — paste invoice/address (+ amount) → prepare → review
+                      → confirm → result; pending sends resolve over the
+                      WS event stream (60s REST-reconcile fallback)
+          · Receive — Lightning (amount/memo → bolt11 QR) | Bitcoin
+                      (on-chain deposit address QR)
+          · row tap — payment / deposit detail sheet; mature deposits
+                      claim via POST /deposits/{outpoint}/claim
 ```
 
 ## Out of scope (v1)
@@ -211,8 +217,10 @@ list.
 - `src/main/kotlin/` — the Ktor server: boot + cross-cutting code at the
   top level, one file per endpoint group under `routes/`.
 - `src/main/resources/` — logging config + Flyway migrations.
-- `client/` — Next.js App Router; one folder per page under `app/`, the
-  typed API client and WebSocket hook under `lib/`.
+- `client/` — Next.js App Router. Routes under `app/`; the ported Glow
+  design system under `components/` + `contexts/`; send/receive flows
+  under `features/`; the typed API client, WebSocket hook and formatting
+  helpers under `lib/`.
 - Root — build (`*.gradle.kts`, `Makefile`), local + deploy
   (`docker-compose.yml`, `Dockerfile`, `fly.toml`), and the docs.
 
