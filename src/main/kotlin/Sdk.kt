@@ -24,6 +24,7 @@ class SdkAccess(
     private val sharedContext: SdkContext,
     network: breez_sdk_spark.Network,
     private val apiKey: String?,
+    private val eventBus: EventBus,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -45,6 +46,7 @@ class SdkAccess(
         val builder = SdkBuilder(baseConfig, seed)
         builder.withSharedContext(sharedContext)
         val sdk = builder.build()
+        sdk.addEventListener(EventBridge(userId, eventBus))
         return try {
             op(sdk)
         } finally {

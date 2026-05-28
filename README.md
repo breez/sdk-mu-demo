@@ -104,9 +104,31 @@ POST   /users/{id}/deposits/{txid}:{vout}/refund
 
 POST   /webhooks/sdk/{user_id}                              # SSP-only; HMAC verified
 
+GET    /users/{id}/events?api_key=…                         # WebSocket; see Events
 GET    /healthz                                             # liveness
 GET    /readyz                                              # readiness (db ping)
 ```
+
+#### Events (WebSocket)
+
+`GET /users/{id}/events` upgrades to a WebSocket and streams SDK events
+for the user. Auth is via `?api_key=…` query string — browsers can't set
+custom headers on `new WebSocket()`. Frames are JSON envelopes tagged by
+`type`:
+
+```jsonc
+{ "type": "payment_succeeded", "payment": { /* PaymentDto */ } }
+{ "type": "payment_pending",   "payment": { /* PaymentDto */ } }
+{ "type": "payment_failed",    "payment": { /* PaymentDto */ } }
+{ "type": "new_deposits",      "deposits": [ /* DepositDto */ ] }
+{ "type": "claimed_deposits",  "deposits": [ /* DepositDto */ ] }
+{ "type": "unclaimed_deposits","deposits": [ /* DepositDto */ ] }
+```
+
+Delivery is best-effort: a per-user in-process bus drops oldest events
+on overflow, and a slow client whose outbox fills is closed with 1008.
+Clients should refetch `/info` and `/payments` after every (re)connect
+to reconcile, then trust the stream. Single-machine only in v1.1.
 
 #### Curl walkthrough
 
@@ -186,22 +208,12 @@ list.
 
 ## Project layout
 
-```
-.
-├── DESIGN.md, PLAN.md, README.md
-├── Makefile, docker-compose.yml, Dockerfile, fly.toml
-├── .env.example, .dockerignore, .gitignore
-├── build.gradle.kts, settings.gradle.kts, gradle.properties
-├── gradle/, gradlew
-├── src/main/kotlin/
-│   ├── Main.kt           Config.kt   Errors.kt
-│   ├── SharedContext.kt  Sdk.kt      Auth.kt
-│   ├── Users.kt          Health.kt
-│   └── routes/{Info,Send,Receive,Payments,Deposits,Webhooks,PaymentDto}.kt
-├── src/main/resources/{logback.xml, db/migration/V1__users.sql}
-├── test/smoke.sh
-└── client/
-    ├── package.json, tsconfig.json, vercel.json
-    ├── app/{layout,page,signup,send,receive,payments}
-    └── lib/api.ts
-```
+- `src/main/kotlin/` — the Ktor server: boot + cross-cutting code at the
+  top level, one file per endpoint group under `routes/`.
+- `src/main/resources/` — logging config + Flyway migrations.
+- `client/` — Next.js App Router; one folder per page under `app/`, the
+  typed API client and WebSocket hook under `lib/`.
+- Root — build (`*.gradle.kts`, `Makefile`), local + deploy
+  (`docker-compose.yml`, `Dockerfile`, `fly.toml`), and the docs.
+
+See `DESIGN.md` for the architecture behind each piece.

@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, loadCreds, type Creds, type Info, type Payment } from "../lib/api";
+import { useEvents } from "../lib/events";
 
 export default function Home() {
   const router = useRouter();
@@ -11,6 +12,19 @@ export default function Home() {
   const [recent, setRecent] = useState<Payment[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
+  const refetch = useCallback(async (c: Creds) => {
+    try {
+      const [i, p] = await Promise.all([
+        api.info(c.user_id, c.api_key),
+        api.listPayments(c.user_id, c.api_key, { limit: 20 }),
+      ]);
+      setInfo(i);
+      setRecent(p.payments);
+    } catch (e: any) {
+      setErr(e.message ?? "failed to load");
+    }
+  }, []);
+
   useEffect(() => {
     const c = loadCreds();
     if (!c) {
@@ -18,19 +32,20 @@ export default function Home() {
       return;
     }
     setCreds(c);
-    (async () => {
-      try {
-        const [i, p] = await Promise.all([
-          api.info(c.user_id, c.api_key),
-          api.listPayments(c.user_id, c.api_key, { limit: 20 }),
-        ]);
-        setInfo(i);
-        setRecent(p.payments);
-      } catch (e: any) {
-        setErr(e.message ?? "failed to load");
-      }
-    })();
-  }, [router]);
+    refetch(c);
+  }, [router, refetch]);
+
+  useEvents(creds, {
+    // Refetch on (re)connect to reconcile any events dropped while
+    // disconnected — the stream is best-effort, REST is canonical.
+    onConnect: () => {
+      if (creds) refetch(creds);
+    },
+    // Any payment / deposit event invalidates balance + history.
+    onEvent: () => {
+      if (creds) refetch(creds);
+    },
+  });
 
   if (!creds) return null;
 

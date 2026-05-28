@@ -138,14 +138,11 @@ fun Route.send(ds: DataSource, sdk: SdkAccess, optimizer: OptimizeQueue) {
             return@post
         }
 
+        // Returns as soon as the SSP accepts the payment; terminal status
+        // (succeeded/failed) is delivered via the WS events stream.
         val options: SendPaymentOptions? = when (entry.prepared.paymentMethod) {
             is SendPaymentMethod.Bolt11Invoice ->
-                // Block for up to 20s on the SSP confirmation so the response
-                // status reflects the terminal outcome instead of "pending"
-                // forever. On timeout the SDK returns the pre-confirmation
-                // payment (status=pending) — no throw. Interim until WS push
-                // lands in v1.1; then drop back to null.
-                SendPaymentOptions.Bolt11Invoice(preferSpark = false, completionTimeoutSecs = 20u)
+                SendPaymentOptions.Bolt11Invoice(preferSpark = false, completionTimeoutSecs = null)
             is SendPaymentMethod.BitcoinAddress ->
                 SendPaymentOptions.BitcoinAddress(confirmationSpeed = OnchainConfirmationSpeed.FAST)
             else -> null
@@ -179,7 +176,9 @@ fun Route.send(ds: DataSource, sdk: SdkAccess, optimizer: OptimizeQueue) {
             call.respond(
                 SendResult(
                     payment_id = resp.payment.id,
-                    status = resp.payment.status.toString().lowercase(),
+                    // Reuse the canonical PaymentStatus → wire-string mapping
+                    // so /send and the events stream never diverge.
+                    status = resp.payment.toDto().status,
                     fee_sats = feeSats,
                 )
             )

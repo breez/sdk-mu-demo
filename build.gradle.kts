@@ -25,7 +25,7 @@ repositories {
 // to the in-tree `libraryVersion=0.1.0` when `LOCAL_SDK=1`.
 val sdkVersion: String = (findProperty("sdkVersion") as? String)
     ?: System.getenv("SDK_VERSION")
-    ?: "0.15.0"
+    ?: "0.16.0-dev1"
 
 dependencies {
     implementation("technology.breez.spark:breez-sdk-spark-kmp-jvm:$sdkVersion")
@@ -43,6 +43,7 @@ dependencies {
     implementation("io.ktor:ktor-server-cors-jvm:2.3.13")
     implementation("io.ktor:ktor-server-rate-limit-jvm:2.3.13")
     implementation("io.ktor:ktor-server-call-logging-jvm:2.3.13")
+    implementation("io.ktor:ktor-server-websockets-jvm:2.3.13")
 
     implementation("ch.qos.logback:logback-classic:1.5.6")
     implementation("net.logstash.logback:logstash-logback-encoder:7.4")

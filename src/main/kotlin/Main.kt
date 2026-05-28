@@ -18,6 +18,10 @@ import io.ktor.server.plugins.ratelimit.rateLimit
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.response.respond
 import io.ktor.server.routing.routing
+import io.ktor.server.websocket.WebSockets
+import io.ktor.server.websocket.pingPeriod
+import io.ktor.server.websocket.timeout
+import java.time.Duration as JDuration
 import javax.sql.DataSource
 import kotlin.time.Duration.Companion.minutes
 import kotlinx.coroutines.runBlocking
@@ -25,6 +29,7 @@ import kotlinx.serialization.json.Json
 import org.flywaydb.core.Flyway
 import org.slf4j.LoggerFactory
 import routes.deposits
+import routes.events
 import routes.info
 import routes.payments
 import routes.receive
@@ -43,11 +48,13 @@ fun main(): Unit = runBlocking {
 
     log.info("building shared SDK context (network={})", cfg.network)
     val sharedCtx = buildSharedContext(cfg)
+    val eventBus = EventBus()
     val sdk = SdkAccess(
         masterSecret = cfg.masterSecret.toByteArray(Charsets.UTF_8),
         sharedContext = sharedCtx,
         network = cfg.network,
         apiKey = cfg.breezApiKey,
+        eventBus = eventBus,
     )
 
     val optimizer = OptimizeQueue(sdk)
@@ -69,6 +76,11 @@ fun main(): Unit = runBlocking {
                 ignoreUnknownKeys = true
                 encodeDefaults = true
             })
+        }
+
+        install(WebSockets) {
+            pingPeriod = JDuration.ofSeconds(30)
+            timeout = JDuration.ofSeconds(60)
         }
 
         if (cfg.corsOrigins.isNotEmpty()) {
@@ -111,6 +123,7 @@ fun main(): Unit = runBlocking {
             receive(ds, sdk)
             send(ds, sdk, optimizer)
             deposits(ds, sdk)
+            events(ds, eventBus)
             webhooks(cfg.webhookSecret, sdk, optimizer)
             rateLimit(CREATE_USER_LIMIT) {
                 users(ds, sdk, cfg)

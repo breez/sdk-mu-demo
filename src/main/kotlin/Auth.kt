@@ -41,7 +41,7 @@ suspend fun ApplicationCall.requireUser(ds: DataSource): String? {
     return principal
 }
 
-private fun lookupUserByKeyHash(ds: DataSource, hash: String): String? {
+internal fun lookupUserByKeyHash(ds: DataSource, hash: String): String? {
     ds.connection.use { conn ->
         conn.prepareStatement("SELECT user_id FROM users WHERE api_key_hash = ?").use { ps ->
             ps.setString(1, hash)

@@ -3,6 +3,7 @@ package routes
 import ErrorCodes
 import SdkAccess
 import breez_sdk_spark.ClaimDepositRequest
+import breez_sdk_spark.DepositInfo
 import breez_sdk_spark.Fee
 import breez_sdk_spark.ListUnclaimedDepositsRequest
 import breez_sdk_spark.RefundDepositRequest
@@ -27,6 +28,16 @@ data class DepositDto(
     val refund_tx: String? = null,
     val refund_tx_id: String? = null,
     val claim_error: String? = null,
+)
+
+fun DepositInfo.toDto(): DepositDto = DepositDto(
+    txid = txid,
+    vout = vout.toLong(),
+    amount_sats = amountSats.toLong(),
+    is_mature = isMature,
+    refund_tx = refundTx,
+    refund_tx_id = refundTxId,
+    claim_error = claimError?.toString(),
 )
 
 @Serializable
@@ -54,18 +65,7 @@ fun Route.deposits(ds: DataSource, sdk: SdkAccess) {
             // ListUnclaimedDepositsRequest is generated as a Kotlin `object`
             // (empty UniFFI record) — passed by name, no `()`.
             val resp = sdk.withUser(userId) { it.listUnclaimedDeposits(ListUnclaimedDepositsRequest) }
-            val dtos = resp.deposits.map {
-                DepositDto(
-                    txid = it.txid,
-                    vout = it.vout.toLong(),
-                    amount_sats = it.amountSats.toLong(),
-                    is_mature = it.isMature,
-                    refund_tx = it.refundTx,
-                    refund_tx_id = it.refundTxId,
-                    claim_error = it.claimError?.toString(),
-                )
-            }
-            call.respond(ListDepositsResponse(deposits = dtos))
+            call.respond(ListDepositsResponse(deposits = resp.deposits.map { it.toDto() }))
         } catch (e: Exception) {
             call.respondError(
                 HttpStatusCode.BadGateway,

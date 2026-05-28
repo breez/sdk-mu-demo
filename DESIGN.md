@@ -379,49 +379,15 @@ Plain CSS / Tailwind, no design system. Wallet UX, not product UX.
 
 ## Project layout
 
-```
-.
-├── DESIGN.md                  (this file)
-├── README.md                  (tutorial / how to run)
-├── Makefile                   (setup, up, down, etc.)
-├── docker-compose.yml         (postgres + app for local)
-├── fly.toml
-├── Dockerfile
-├── .env.example
-├── settings.gradle.kts
-├── build.gradle.kts
-├── gradle/, gradlew
-├── src/
-│   ├── main/kotlin/
-│   │   ├── Main.kt
-│   │   ├── Config.kt
-│   │   ├── Errors.kt          (envelope + stable codes)
-│   │   ├── SharedContext.kt
-│   │   ├── Sdk.kt             (withUser helper)
-│   │   ├── Auth.kt            (api-key middleware)
-│   │   ├── Users.kt           (POST /users, mint + register webhook)
-│   │   ├── routes/
-│   │   │   ├── Info.kt
-│   │   │   ├── Send.kt        (prepare + confirm)
-│   │   │   ├── Receive.kt
-│   │   │   ├── Payments.kt    (list + get)
-│   │   │   ├── PaymentDto.kt  (shared payment serialization)
-│   │   │   ├── Deposits.kt
-│   │   │   └── Webhooks.kt
-│   │   └── Health.kt
-│   ├── main/resources/
-│   │   ├── logback.xml
-│   │   └── db/migration/      (Flyway, V1__users.sql, …)
-│   └── test/kotlin/           (per-route happy-path tests against regtest)
-└── client/                    (Next.js App Router)
-    ├── package.json
-    ├── app/
-    │   ├── layout.tsx
-    │   ├── page.tsx
-    │   ├── signup/page.tsx
-    │   ├── send/page.tsx
-    │   ├── receive/page.tsx
-    │   └── payments/...
-    ├── lib/api.ts             (typed client for the server)
-    └── vercel.json
-```
+High-level only — read the directories, not a file list that rots.
+
+- `DESIGN.md` / `PLAN.md` / `README.md` — decisions, task list, tutorial.
+- `src/main/kotlin/` — the Ktor app. Boot + cross-cutting pieces live at
+  the top level (`Main`, `Config`, `Auth`, `Sdk`, `SharedContext`, the
+  event bus + bridge, …); `routes/` holds one file per endpoint group.
+- `src/main/resources/` — `logback.xml` and Flyway migrations
+  (`db/migration/`).
+- `client/` — Next.js App Router. One folder per page under `app/`; the
+  typed API client and the events (WebSocket) hook under `lib/`.
+- Root — build (`*.gradle.kts`, `Makefile`, `gradlew`) and deploy
+  (`docker-compose.yml`, `Dockerfile`, `fly.toml`, `.env.example`).
