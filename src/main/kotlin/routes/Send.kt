@@ -3,6 +3,7 @@ package routes
 import ErrorCodes
 import OptimizeQueue
 import SdkAccess
+import SyncQueue
 import breez_sdk_spark.OnchainConfirmationSpeed
 import breez_sdk_spark.PrepareSendPaymentRequest
 import breez_sdk_spark.PrepareSendPaymentResponse
@@ -56,7 +57,7 @@ data class SendResult(
  * Prepare cache is per-process; we explicitly bind each entry to a `userId`
  * so a leaked id can't be confirmed under a different principal.
  */
-fun Route.send(ds: DataSource, sdk: SdkAccess, optimizer: OptimizeQueue) {
+fun Route.send(ds: DataSource, sdk: SdkAccess, optimizer: OptimizeQueue, syncer: SyncQueue) {
     val cache = PrepareCache()
 
     post("/users/{userId}/payments/send/prepare") {
@@ -183,6 +184,10 @@ fun Route.send(ds: DataSource, sdk: SdkAccess, optimizer: OptimizeQueue) {
                 )
             )
         } catch (e: Exception) {
+            // A failed send can leave leaves locked then returned by Spark in a
+            // state the local store doesn't reflect, and no webhook fires for
+            // that transition. Sync to reconcile before the next send attempt.
+            syncer.enqueue(userId)
             call.respondError(
                 HttpStatusCode.BadGateway,
                 ErrorCodes.UPSTREAM_UNAVAILABLE,
