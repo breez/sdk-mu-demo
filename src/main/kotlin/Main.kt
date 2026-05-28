@@ -50,6 +50,8 @@ fun main(): Unit = runBlocking {
         apiKey = cfg.breezApiKey,
     )
 
+    val optimizer = OptimizeQueue(sdk)
+
     Runtime.getRuntime().addShutdownHook(Thread {
         log.info("shutting down")
         try { ds.close() } catch (e: Exception) { log.warn("HikariCP close: {}", e.message) }
@@ -107,9 +109,9 @@ fun main(): Unit = runBlocking {
             info(ds, sdk)
             payments(ds, sdk)
             receive(ds, sdk)
-            send(ds, sdk)
+            send(ds, sdk, optimizer)
             deposits(ds, sdk)
-            webhooks(cfg.webhookSecret, sdk)
+            webhooks(cfg.webhookSecret, sdk, optimizer)
             rateLimit(CREATE_USER_LIMIT) {
                 users(ds, sdk, cfg)
             }

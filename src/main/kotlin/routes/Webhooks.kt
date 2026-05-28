@@ -1,6 +1,7 @@
 package routes
 
 import ErrorCodes
+import OptimizeQueue
 import SdkAccess
 import breez_sdk_spark.SyncWalletRequest
 import io.ktor.http.HttpStatusCode
@@ -32,7 +33,7 @@ data class WebhookAck(val ok: Boolean)
  * NB: no auth header; the bearer-auth middleware doesn't apply. This route
  * is open + signature-verified.
  */
-fun Route.webhooks(webhookSecret: String, sdk: SdkAccess) {
+fun Route.webhooks(webhookSecret: String, sdk: SdkAccess, optimizer: OptimizeQueue) {
     val secretBytes = webhookSecret.toByteArray(Charsets.UTF_8)
 
     post("/webhooks/sdk/{userId}") {
@@ -73,6 +74,10 @@ fun Route.webhooks(webhookSecret: String, sdk: SdkAccess) {
             )
             return@post
         }
+
+        // Incoming payment likely changed the leaf set — queue optimization.
+        // Runs asynchronously; never blocks the SSP ack.
+        optimizer.enqueue(userId)
 
         log.info("webhook handled user={} body_bytes={}", userId, raw.size)
         call.respond(WebhookAck(ok = true))

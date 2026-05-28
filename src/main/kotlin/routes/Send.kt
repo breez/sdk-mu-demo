@@ -1,6 +1,7 @@
 package routes
 
 import ErrorCodes
+import OptimizeQueue
 import SdkAccess
 import breez_sdk_spark.OnchainConfirmationSpeed
 import breez_sdk_spark.PrepareSendPaymentRequest
@@ -55,7 +56,7 @@ data class SendResult(
  * Prepare cache is per-process; we explicitly bind each entry to a `userId`
  * so a leaked id can't be confirmed under a different principal.
  */
-fun Route.send(ds: DataSource, sdk: SdkAccess) {
+fun Route.send(ds: DataSource, sdk: SdkAccess, optimizer: OptimizeQueue) {
     val cache = PrepareCache()
 
     post("/users/{userId}/payments/send/prepare") {
@@ -172,6 +173,9 @@ fun Route.send(ds: DataSource, sdk: SdkAccess) {
                 }
                 else -> resp.payment.fees.longValue()
             }
+            // Outgoing payment likely changed the leaf set — queue optimization.
+            optimizer.enqueue(userId)
+
             call.respond(
                 SendResult(
                     payment_id = resp.payment.id,

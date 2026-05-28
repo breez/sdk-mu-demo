@@ -225,10 +225,14 @@ The always-on JVM hosts a single in-memory optimize queue alongside the
 HTTP server. Webhook handler (after `syncWallet`) and send handler
 (after `sendPayment`) both enqueue `OptimizeJob(userId)`. A worker
 coroutine drains the queue and, per job, builds a per-user SDK via
-`withUser`, calls `startLeafOptimization`, and awaits the terminal
-`OptimizationEvent` (`Completed | Cancelled | Failed | Skipped`) via
-`addEventListener` before disconnecting. On timeout it calls
-`cancelLeafOptimization` to release reservations cleanly.
+`withUser` and calls `optimizeLeaves(OptimizeLeavesRequest(mode = FULL))`
+— a `suspend` call (uniffi async, so it doesn't pin a thread) that
+returns `OptimizeLeavesResponse` whose `outcome` is
+`Completed { rounds_executed }` (`rounds_executed == 0` means the wallet
+was already optimal) once the run finishes. `withTimeout(5min)` wraps the
+call as a circuit-breaker: cancellation propagates into the SDK (uniffi
+drops the Rust future), bounding a run whose future never completes from
+holding a worker permit indefinitely.
 
 - **Dedup.** If a job for `userId` is already queued or in-flight, drop
   the new one. A burst of payments shouldn't fire N optimizes.
