@@ -73,6 +73,7 @@ fun Route.events(ds: DataSource, bus: EventBus) {
         try {
             for (ev in outbox) {
                 send(Frame.Text(eventsJson.encodeToString(Envelope.serializer(), ev)))
+                log.info("ws frame sent user={} type={}", pathUserId, ev::class.simpleName)
             }
             // outbox.close() inside pump → loop exits naturally on overflow
             overflowed = true

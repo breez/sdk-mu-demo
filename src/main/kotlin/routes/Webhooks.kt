@@ -37,11 +37,14 @@ fun Route.webhooks(webhookSecret: String, sdk: SdkAccess, optimizer: OptimizeQue
     val secretBytes = webhookSecret.toByteArray(Charsets.UTF_8)
 
     post("/webhooks/sdk/{userId}") {
+        val receivedAt = System.currentTimeMillis()
+
         val userId = call.parameters["userId"]
         if (userId.isNullOrBlank()) {
             call.respondError(HttpStatusCode.BadRequest, ErrorCodes.BAD_REQUEST, "missing userId")
             return@post
         }
+        log.info("webhook received user={}", userId)
 
         val raw = try {
             call.receive<ByteArray>()
@@ -62,6 +65,7 @@ fun Route.webhooks(webhookSecret: String, sdk: SdkAccess, optimizer: OptimizeQue
             return@post
         }
 
+        val syncStart = System.currentTimeMillis()
         try {
             sdk.withUser(userId) { it.syncWallet(SyncWalletRequest) }
         } catch (e: Exception) {
@@ -74,12 +78,16 @@ fun Route.webhooks(webhookSecret: String, sdk: SdkAccess, optimizer: OptimizeQue
             )
             return@post
         }
+        val syncMs = System.currentTimeMillis() - syncStart
 
         // Incoming payment likely changed the leaf set — queue optimization.
         // Runs asynchronously; never blocks the SSP ack.
         optimizer.enqueue(userId)
 
-        log.info("webhook handled user={} body_bytes={}", userId, raw.size)
+        log.info(
+            "webhook handled user={} body_bytes={} sync_ms={} total_ms={}",
+            userId, raw.size, syncMs, System.currentTimeMillis() - receivedAt,
+        )
         call.respond(WebhookAck(ok = true))
     }
 }
