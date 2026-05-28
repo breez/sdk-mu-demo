@@ -14,7 +14,11 @@ import breez_sdk_spark.newSharedSdkContext
  * latency and exhausting FDs / ephemeral ports under load.
  */
 suspend fun buildSharedContext(cfg: AppConfig): SdkContext {
-    val postgres = defaultPostgresStorageConfig(cfg.databaseUrl)
+    val postgres = defaultPostgresStorageConfig(cfg.databaseUrl).apply {
+        waitTimeoutSecs = 15uL
+        createTimeoutSecs = 15uL
+        recycleTimeoutSecs = 10uL
+    }
     return newSharedSdkContext(
         SdkContextConfig(
             network = cfg.network,
