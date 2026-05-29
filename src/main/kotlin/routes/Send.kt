@@ -3,7 +3,6 @@ package routes
 import ErrorCodes
 import OptimizeQueue
 import SdkAccess
-import SyncQueue
 import breez_sdk_spark.OnchainConfirmationSpeed
 import breez_sdk_spark.PrepareSendPaymentRequest
 import breez_sdk_spark.PrepareSendPaymentResponse
@@ -21,9 +20,12 @@ import io.ktor.server.routing.post
 import java.util.concurrent.ConcurrentHashMap
 import javax.sql.DataSource
 import kotlinx.serialization.Serializable
+import org.slf4j.LoggerFactory
 import randomBytes
 import requireUser
 import respondError
+
+private val log = LoggerFactory.getLogger("Send")
 
 @Serializable
 data class PrepareBody(
@@ -57,7 +59,7 @@ data class SendResult(
  * Prepare cache is per-process; we explicitly bind each entry to a `userId`
  * so a leaked id can't be confirmed under a different principal.
  */
-fun Route.send(ds: DataSource, sdk: SdkAccess, optimizer: OptimizeQueue, syncer: SyncQueue) {
+fun Route.send(ds: DataSource, sdk: SdkAccess, optimizer: OptimizeQueue) {
     val cache = PrepareCache()
 
     post("/users/{userId}/payments/send/prepare") {
@@ -184,10 +186,7 @@ fun Route.send(ds: DataSource, sdk: SdkAccess, optimizer: OptimizeQueue, syncer:
                 )
             )
         } catch (e: Exception) {
-            // A failed send can leave leaves locked then returned by Spark in a
-            // state the local store doesn't reflect, and no webhook fires for
-            // that transition. Sync to reconcile before the next send attempt.
-            syncer.enqueue(userId)
+            log.warn("send failed user={} type={}: {}", userId, e::class.simpleName, e.message, e)
             call.respondError(
                 HttpStatusCode.BadGateway,
                 ErrorCodes.UPSTREAM_UNAVAILABLE,

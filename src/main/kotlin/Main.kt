@@ -59,7 +59,6 @@ fun main(): Unit = runBlocking {
     )
 
     val optimizer = OptimizeQueue(sdk)
-    val syncer = SyncQueue(sdk)
 
     Runtime.getRuntime().addShutdownHook(Thread {
         log.info("shutting down")
@@ -123,7 +122,7 @@ fun main(): Unit = runBlocking {
             info(ds, sdk)
             payments(ds, sdk)
             receive(ds, sdk)
-            send(ds, sdk, optimizer, syncer)
+            send(ds, sdk, optimizer)
             deposits(ds, sdk)
             events(ds, eventBus)
             webhooks(cfg.webhookSecret, sdk, optimizer)

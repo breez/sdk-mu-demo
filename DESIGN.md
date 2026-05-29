@@ -91,11 +91,8 @@ Rules — codified in code, called out in README:
 
 - **No `ensureSynced=true` on reads.** Server mode rejects it. Reads
   see the local DB, which is kept fresh by webhook-driven syncs.
-- **Sync only on signals, never on reads.** `syncWallet()` runs in two
-  cases: the webhook handler (on the user the event names) and, as a
-  reconciliation workaround, the send handler's failure path (see
-  Background tasks → Reconciliation sync). Reads never sync — they trust
-  the local DB.
+- **No defensive sync.** `syncWallet()` is called only by the webhook
+  handler, on the user whose wallet the event names. Reads never sync.
 - **No per-user lock.** Concurrent same-user requests are safe
   (operator-level single-spend via FROST; SDK retries on race; tree
   store writes idempotently). Verified by the upstream bench.
@@ -225,61 +222,33 @@ optimize queue).
 
 ## Background tasks
 
-The always-on JVM hosts a set of per-user background queues alongside the
-HTTP server. They share one piece of machinery — `UserWorkQueue` — and
-differ only in the SDK call each runs:
-
-- **Optimize queue.** Webhook handler (after `syncWallet`) and send
-  handler (after a successful `sendPayment`) enqueue the user. The worker
-  builds a per-user SDK via `withUser` and calls
-  `optimizeLeaves(OptimizeLeavesRequest(mode = FULL))` — a `suspend` call
-  (uniffi async, so it doesn't pin a thread) whose `outcome` is
-  `Completed { rounds_executed }` (`rounds_executed == 0` means the wallet
-  was already optimal) once the run finishes.
-- **Sync queue.** The send handler's failure path enqueues the user; the
-  worker runs `syncWallet()`. See *Reconciliation sync* below for why.
-
-Shared `UserWorkQueue` behavior:
+The always-on JVM hosts a single in-memory optimize queue alongside the
+HTTP server. Webhook handler (after `syncWallet`) and send handler
+(after `sendPayment`) both enqueue `OptimizeJob(userId)`. A worker
+coroutine drains the queue and, per job, builds a per-user SDK via
+`withUser` and calls `optimizeLeaves(OptimizeLeavesRequest(mode = FULL))`
+— a `suspend` call (uniffi async, so it doesn't pin a thread) that
+returns `OptimizeLeavesResponse` whose `outcome` is
+`Completed { rounds_executed }` (`rounds_executed == 0` means the wallet
+was already optimal) once the run finishes. `withTimeout(5min)` wraps the
+call as a circuit-breaker: cancellation propagates into the SDK (uniffi
+drops the Rust future), bounding a run whose future never completes from
+holding a worker permit indefinitely.
 
 - **Dedup.** If a job for `userId` is already queued or in-flight, drop
-  the new one. A burst of events shouldn't fire N runs for the same user.
+  the new one. A burst of payments shouldn't fire N optimizes.
 - **Concurrency cap.** Small semaphore (2–4) so a fleet-wide spike
   doesn't pin the JVM.
-- **Circuit-breaker.** `withTimeout` wraps each run: cancellation
-  propagates into the SDK (uniffi drops the Rust future), bounding a run
-  whose future never completes from holding a worker permit indefinitely.
 - **Auto-optimize disabled.** `LeafOptimizationConfig.autoEnabled =
   false`. The SDK's built-in auto-optimizer relies on a long-lived
   connection that the per-request `withUser` pattern doesn't provide.
 
 In-memory is enough for v1: a process restart drops queued jobs; the
-next event for that user re-enqueues. Workers use the same
+next payment for that user re-enqueues. The worker uses the same
 `SharedSdkContext` and `withUser` helper as the HTTP routes.
 
-### Reconciliation sync
-
-Webhooks cover the sync-on-finish cases we register for (lightning
-receive/send finished, coop exit, static deposit). They do **not** cover
-every situation where the SDK's local view can drift from Spark — notably
-leaves that need to be re-claimed after the fact. The motivating case: a
-send locks leaves, the send fails, and Spark later returns those leaves in
-a state the local store doesn't reflect. No webhook fires for that
-transition, so without an explicit sync the next send sees a stale leaf
-set and fails. The failure even survives a process restart, since the
-drift is in persisted/upstream state, not in memory.
-
-The workaround: the send handler enqueues a `syncWallet()` on its failure
-path to reconcile the local view (claiming returned leaves) before the
-next attempt. It reuses the optimize queue's machinery via `UserWorkQueue`
-— same dedup, concurrency cap, and circuit-breaker.
-
-This is a targeted patch, not a general fix: it only reconciles after
-failures the server actually observes. A more complete approach
-(alternative or complement) is a **periodic background sync** that sweeps
-users on an interval, catching drift regardless of whether a triggering
-event was seen. Deferred for v1 to avoid the fleet-wide cost of blanket
-polling; the failure-path sync covers the known case. The real fix is
-upstream: webhook coverage for all states that warrant a sync.
+No reconciliation sync. The webhook delivery contract is the recovery
+path: we 5xx on failure, the SSP retries.
 
 ## Data model
 
@@ -370,9 +339,8 @@ the Gradle `run` task is what makes that path work.
 - Secrets via `flyctl secrets set` for `MASTER_SECRET`,
   `WEBHOOK_SECRET`, `DATABASE_URL`, `BREEZ_API_KEY`.
 - `min_machines_running = 1`, `auto_stop_machines = "off"`. The JVM
-  hosts in-process background queue workers (optimize, reconciliation
-  sync) that drain opportunistically after payments — needs a
-  continuously running process.
+  hosts an in-process optimize queue worker that drains opportunistically
+  after payments — needs a continuously running process.
 
 ### Database
 
