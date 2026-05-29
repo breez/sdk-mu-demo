@@ -12,6 +12,7 @@ primary_region = "ams"
   PORT = "8080"
   NETWORK = "mainnet"
   LOG_FORMAT = "json"
+  SDK_LOG_FILTER = "debug"
   # PUBLIC_BASE_URL, CORS_ORIGINS, etc. should be set via `flyctl secrets set`.
 
 [http_service]

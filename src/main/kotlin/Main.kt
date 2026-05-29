@@ -42,6 +42,7 @@ private val CREATE_USER_LIMIT = RateLimitName("create_user")
 
 fun main(): Unit = runBlocking {
     val cfg = AppConfig.fromEnv()
+    initSdkLogging(cfg.sdkLogFilter)
 
     val ds = buildDataSource(cfg)
     migrate(ds)

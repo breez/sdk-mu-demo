@@ -15,6 +15,8 @@ data class AppConfig(
     val breezApiKey: String?,
     val port: Int,
     val corsOrigins: List<String>,
+    /** EnvFilter for the SDK's Rust logs (e.g. "info", "info,spark=debug"). */
+    val sdkLogFilter: String,
 ) {
     /** Hikari + Flyway want a jdbc:* URL with credentials supplied separately. */
     val postgres: PostgresDsn = PostgresDsn.parse(databaseUrl)
@@ -50,6 +52,7 @@ data class AppConfig(
                     ?.map { it.trim() }
                     ?.filter { it.isNotEmpty() }
                     ?: emptyList(),
+                sdkLogFilter = env("SDK_LOG_FILTER")?.takeIf { it.isNotBlank() } ?: "info",
             )
         }
     }

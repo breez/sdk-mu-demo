@@ -18,6 +18,13 @@
         </encoder>
     </appender>
 
+    <!--
+      SDK (Rust) logs arrive via the initLogging bridge. Pin wide-open so
+      logback never re-filters them; SDK_LOG_FILTER (EnvFilter) is the only
+      gate on SDK verbosity.
+    -->
+    <logger name="breez_sdk" level="TRACE"/>
+
     <root level="${LOG_LEVEL:-info}">
         <appender-ref ref="${LOG_APPENDER}"/>
     </root>
