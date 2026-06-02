@@ -17,6 +17,12 @@ data class AppConfig(
     val corsOrigins: List<String>,
     /** EnvFilter for the SDK's Rust logs (e.g. "info", "info,spark=debug"). */
     val sdkLogFilter: String,
+    /**
+     * Max connections in the SDK's shared Postgres pool. Null leaves the SDK
+     * default (`num_cpus * 4`), which is just 4 on a 1-CPU box. Made explicit
+     * so the pool size doesn't silently track the host's core count.
+     */
+    val sdkPgMaxPoolSize: Int?,
 ) {
     /** Hikari + Flyway want a jdbc:* URL with credentials supplied separately. */
     val postgres: PostgresDsn = PostgresDsn.parse(databaseUrl)
@@ -53,6 +59,10 @@ data class AppConfig(
                     ?.filter { it.isNotEmpty() }
                     ?: emptyList(),
                 sdkLogFilter = env("SDK_LOG_FILTER")?.takeIf { it.isNotBlank() } ?: "info",
+                sdkPgMaxPoolSize = env("SDK_PG_MAX_POOL_SIZE")?.takeIf { it.isNotBlank() }?.let {
+                    it.toIntOrNull()?.takeIf { n -> n > 0 }
+                        ?: error("SDK_PG_MAX_POOL_SIZE must be a positive integer; got '$it'")
+                },
             )
         }
     }

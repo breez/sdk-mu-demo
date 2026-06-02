@@ -13,6 +13,9 @@ primary_region = "lhr"
   NETWORK = "mainnet"
   LOG_FORMAT = "json"
   SDK_LOG_FILTER = "debug"
+  # SDK Postgres pool cap. Unset falls back to the SDK default (num_cpus*4 = 4
+  # on this 1-CPU VM); pin it so the pool doesn't silently track core count.
+  SDK_PG_MAX_POOL_SIZE = "32"
   # PUBLIC_BASE_URL, CORS_ORIGINS, etc. should be set via `flyctl secrets set`.
 
 [http_service]
