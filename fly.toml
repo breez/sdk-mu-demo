@@ -3,7 +3,7 @@
 # DATABASE_URL, BREEZ_API_KEY, PUBLIC_BASE_URL).
 
 app = "sdk-mu-demo"
-primary_region = "ams"
+primary_region = "lhr"
 
 [build]
   dockerfile = "Dockerfile"
