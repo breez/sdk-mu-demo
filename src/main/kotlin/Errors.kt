@@ -17,6 +17,8 @@ object ErrorCodes {
     const val NOT_FOUND = "not_found"
     const val BAD_REQUEST = "bad_request"
     const val UPSTREAM_UNAVAILABLE = "upstream_unavailable"
+    /** User was provisioned under the other SIGNER mode than the deployment runs. */
+    const val SIGNER_MISMATCH = "signer_mismatch"
     const val INTERNAL = "internal"
 }
 

@@ -21,9 +21,6 @@ client on Vercel) so a team can actually try it.
 ## Non-goals (v1)
 
 - Spark addresses, Spark invoices, LNURL, lightning addresses.
-- External signer integration (Turnkey etc.) — postponed; seed is
-  derived in-process from `MASTER_SECRET`. Refactor when the SDK's
-  signer story stabilizes.
 - HA, k8s, Prometheus dashboards, alerting, runbooks.
 - KYC, billing, rate limiting (beyond trivial), abuse mitigation.
 - User deletion / wallet sweep / disable flow.
@@ -99,6 +96,44 @@ Rules — codified in code, called out in README:
 - **Always disconnect.** `try/finally`. Flushes outstanding writes.
 - **One SDK per request, never pinned to a worker thread.**
 
+## Signers
+
+Deployment-wide toggle: `SIGNER=seed` (default) or `SIGNER=turnkey`.
+Same request flow either way; only step 1 of `withUser` differs.
+
+- **seed** — per-user entropy derived in-process:
+  `HMAC-SHA512(MASTER_SECRET, user_id)`. One env secret, zero external
+  dependencies. Compromise of the host exposes every user's keys.
+- **turnkey** — remote signing via the SDK's Turnkey backend
+  (`createTurnkeySigner` → `SdkBuilder.newWithSigner`). Every user maps
+  to their own Turnkey HD wallet (independent 24-word seed inside the
+  enclave); keys never touch this process except two by-design exports
+  the SDK makes (the non-Spark ECIES/HMAC key and the static-deposit
+  refund key).
+
+Turnkey specifics:
+
+- **Provisioning is ours.** The SDK's stance is "bring your own
+  wallet", so `POST /users` creates it: one `CREATE_WALLET` activity
+  seeding *both* identity-account formats (compressed ECDSA + Spark
+  Schnorr — a second format can't be added to an occupied path later).
+  Models come from Turnkey's official `com.turnkey:types` artifact;
+  transport is the JDK HttpClient and the `X-Stamp` header is plain
+  JCA, which is why the API key must be P-256 (their `http`/`stamper`
+  packages are Android AARs; the JDK doesn't ship secp256k1).
+- **Order: wallet → webhook → row.** The webhook step is a full SDK
+  connect, so it proves wallet + signers + operator auth before the
+  user becomes visible. Failures leave an orphaned wallet at most —
+  logged, name-prefixed `sdk-mu-demo-`, reaped manually.
+- **Signers rebuilt per request.** No cache, matching the stateless
+  per-request lifecycle. Costs a few Turnkey round trips per request
+  (account materialization 409s + encryption-key export) on top of
+  per-operation signing — the first thing to revisit if latency or
+  Turnkey rate limits bite.
+- **Mode mismatch fails loudly.** Users record the signer they were
+  provisioned with; a request under the other mode is a 409
+  `signer_mismatch`, not an empty wallet under freshly derived keys.
+
 ## API surface
 
 All `/users/{id}/...` endpoints require `Authorization: Bearer <api_key>`.
@@ -151,7 +186,7 @@ GET    /readyz                              # readiness (db ping + shared-ctx ok
 
 Errors: `{ error: { code, message } }`. Stable codes
 (`unauthorized`, `forbidden`, `not_found`, `bad_request`,
-`upstream_unavailable`, `internal`).
+`upstream_unavailable`, `signer_mismatch`, `internal`).
 
 ### prepare_id
 
@@ -256,12 +291,14 @@ App-owned tables, kept separate from SDK tables (which live in the same
 DB but are SDK-managed and we never touch them):
 
 ```sql
--- v1__users.sql
+-- v1__users.sql + v2__signer.sql
 CREATE TABLE users (
-    user_id        VARCHAR(64)  PRIMARY KEY,             -- ULID
-    api_key_hash   CHAR(64)     NOT NULL UNIQUE,         -- SHA-256(api_key)
-    created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    webhook_id     VARCHAR(64)                           -- from SDK, for unregister
+    user_id           VARCHAR(64)  PRIMARY KEY,           -- ULID
+    api_key_hash      CHAR(64)     NOT NULL UNIQUE,       -- SHA-256(api_key)
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    webhook_id        VARCHAR(64),                        -- from SDK, for unregister
+    signer            VARCHAR(16)  NOT NULL DEFAULT 'seed', -- provisioning-time SIGNER
+    turnkey_wallet_id VARCHAR(64)                         -- set iff signer = 'turnkey'
 );
 CREATE INDEX idx_users_created_at ON users (created_at);
 ```
@@ -297,6 +334,11 @@ All via env. `.env.example` committed. Production: Fly secrets.
 | `PORT` | no | `8080` | |
 | `CORS_ORIGINS` | no | empty | Comma-sep; client origin in deployed mode |
 | `LOG_LEVEL` | no | `info` | |
+| `SIGNER` | no | `seed` | `seed` \| `turnkey` (see Signers) |
+| `TURNKEY_ORG_ID` | turnkey | — | Organization owning the per-user wallets |
+| `TURNKEY_API_PUBLIC_KEY` | turnkey | — | P-256, compressed hex |
+| `TURNKEY_API_PRIVATE_KEY` | turnkey | — | P-256 scalar, hex |
+| `TURNKEY_BASE_URL` | no | `https://api.turnkey.com` | |
 
 ## Build & local dev
 

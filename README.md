@@ -59,6 +59,30 @@ Gradle build picks up that local artifact instead of the published one.
 The Docker image is built against the published SDK only; iterate via
 `make run`.
 
+#### Remote signing (`SIGNER=turnkey`)
+
+By default per-user wallet seeds are derived in-process from
+`MASTER_SECRET`. Set `SIGNER=turnkey` to keep all keys in
+[Turnkey](https://www.turnkey.com)'s enclave instead: `POST /users`
+creates one Turnkey HD wallet per user (named `sdk-mu-demo-<user_id>`),
+and the SDK signs through Turnkey's API via its remote-signer backend.
+
+Setup:
+
+1. Create a Turnkey organization and an API key. Use a **P-256** key
+   (the console default) — the server stamps its provisioning requests
+   with plain JCA, which doesn't do secp256k1.
+2. Set in `.env`: `SIGNER=turnkey`, `TURNKEY_ORG_ID`,
+   `TURNKEY_API_PUBLIC_KEY`, `TURNKEY_API_PRIVATE_KEY`.
+3. Run as usual. Users provisioned in one mode are refused under the
+   other (`409 signer_mismatch`) — the keys differ, so flipping
+   `SIGNER` on a live DB would otherwise present empty wallets.
+
+Until the Turnkey backend ships in a published SDK release
+([breez/spark-sdk#943](https://github.com/breez/spark-sdk/pull/943)),
+this needs `LOCAL_SDK=1` with `SDK_PATH` pointing at a checkout of
+that branch.
+
 #### Webhooks locally
 
 The webhook handler needs a public URL the SSP can reach. Tunnel with
@@ -208,9 +232,8 @@ sheet:
 ## Out of scope (v1)
 
 Spark addresses + Spark invoices, LNURL / lightning addresses, token
-payments, external signer integration, HA / Prometheus / alerting, KYC
-or billing, account deletion. See `DESIGN.md` "Non-goals" for the full
-list.
+payments, HA / Prometheus / alerting, KYC or billing, account
+deletion. See `DESIGN.md` "Non-goals" for the full list.
 
 ## Project layout
 

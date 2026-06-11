@@ -26,22 +26,45 @@ data class CreateUserResponse(
  *   api_key      = `mu_` + Crockford-base32(32 random bytes)   (shown once)
  *   stored       = SHA-256(api_key) hex
  *
- * Provisioning order matters: we flip the wallet to private mode and
- * register the SSP webhook *before* inserting the user row. If either
- * step fails we 502 and never persist the user, so the client retries
- * with a fresh ULID instead of being left with a public-mode wallet or
- * a row that gets no payment events. The SDK-side state (private flag,
- * webhook registration) lands on a wallet whose userId we never return —
- * unreachable and effectively garbage.
+ * Provisioning order matters: create the Turnkey wallet (turnkey mode
+ * only), then flip the wallet to private mode and register the SSP
+ * webhook, and only then insert the user row. If any step fails we 502
+ * and never persist the user, so the client retries with a fresh ULID
+ * instead of being left with a public-mode wallet or a row that gets no
+ * payment events. State created by a failed attempt is unreachable
+ * garbage: SDK-side state lands on a wallet whose userId we never
+ * return, and an orphaned Turnkey wallet is logged and left for manual
+ * reaping (identifiable by its `sdk-mu-demo-` name prefix).
+ *
+ * The webhook step is a full SDK connect, so in turnkey mode it also
+ * proves the whole chain — wallet exists, signers build, operators
+ * accept the identity — before the user becomes visible.
  */
-fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig) {
+fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig, provisioner: TurnkeyProvisioner?) {
     post("/users") {
         val userId = newUlid()
         val apiKey = "mu_" + crockfordEncode(randomBytes(32))
         val keyHash = sha256Hex(apiKey.toByteArray(Charsets.UTF_8))
 
+        val turnkeyWalletId: String? = if (cfg.signer == SignerMode.TURNKEY) {
+            try {
+                checkNotNull(provisioner) { "SIGNER=turnkey without a TurnkeyProvisioner" }
+                    .createWallet(userId)
+            } catch (e: Exception) {
+                log.warn("turnkey wallet creation failed for {}: {}", userId, e.message)
+                call.respondError(
+                    HttpStatusCode.BadGateway,
+                    ErrorCodes.UPSTREAM_UNAVAILABLE,
+                    "user provisioning failed, please retry",
+                )
+                return@post
+            }
+        } else {
+            null
+        }
+
         val webhookId: String = try {
-            sdk.withUser(userId) {
+            sdk.withProvisionalUser(userId, turnkeyWalletId) {
                 it.updateUserSettings(
                     UpdateUserSettingsRequest(
                         sparkPrivateModeEnabled = true,
@@ -62,7 +85,14 @@ fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig) {
                 ).webhookId
             }
         } catch (e: Exception) {
-            log.warn("user provisioning failed for {}: {}", userId, e.message)
+            if (turnkeyWalletId != null) {
+                log.warn(
+                    "user provisioning failed for {} (turnkey wallet {} orphaned, reap by name prefix): {}",
+                    userId, turnkeyWalletId, e.message,
+                )
+            } else {
+                log.warn("user provisioning failed for {}: {}", userId, e.message)
+            }
             call.respondError(
                 HttpStatusCode.BadGateway,
                 ErrorCodes.UPSTREAM_UNAVAILABLE,
@@ -73,11 +103,13 @@ fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig) {
 
         ds.connection.use { conn ->
             conn.prepareStatement(
-                "INSERT INTO users (user_id, api_key_hash, webhook_id) VALUES (?, ?, ?)"
+                "INSERT INTO users (user_id, api_key_hash, webhook_id, signer, turnkey_wallet_id) VALUES (?, ?, ?, ?, ?)"
             ).use { ps ->
                 ps.setString(1, userId)
                 ps.setString(2, keyHash)
                 ps.setString(3, webhookId)
+                ps.setString(4, cfg.signer.name.lowercase())
+                ps.setString(5, turnkeyWalletId)
                 ps.executeUpdate()
             }
         }

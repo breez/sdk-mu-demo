@@ -2,6 +2,7 @@ package routes
 
 import ErrorCodes
 import SdkAccess
+import SignerMismatchException
 import breez_sdk_spark.ReceivePaymentMethod
 import breez_sdk_spark.ReceivePaymentRequest
 import io.ktor.http.HttpStatusCode
@@ -68,6 +69,8 @@ fun Route.receive(ds: DataSource, sdk: SdkAccess) {
                     fee_sats = resp.fee.longValue(),
                 )
             )
+        } catch (e: SignerMismatchException) {
+            throw e // StatusPages → 409 signer_mismatch
         } catch (e: Exception) {
             call.respondError(
                 HttpStatusCode.BadGateway,

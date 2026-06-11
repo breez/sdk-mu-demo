@@ -3,6 +3,7 @@ package routes
 import ErrorCodes
 import OptimizeQueue
 import SdkAccess
+import SignerMismatchException
 import breez_sdk_spark.OnchainConfirmationSpeed
 import breez_sdk_spark.PrepareSendPaymentRequest
 import breez_sdk_spark.PrepareSendPaymentResponse
@@ -84,6 +85,8 @@ fun Route.send(ds: DataSource, sdk: SdkAccess, optimizer: OptimizeQueue) {
                     )
                 )
             }
+        } catch (e: SignerMismatchException) {
+            throw e // StatusPages → 409 signer_mismatch
         } catch (e: Exception) {
             call.respondError(
                 HttpStatusCode.BadGateway,
@@ -185,6 +188,8 @@ fun Route.send(ds: DataSource, sdk: SdkAccess, optimizer: OptimizeQueue) {
                     fee_sats = feeSats,
                 )
             )
+        } catch (e: SignerMismatchException) {
+            throw e // StatusPages → 409 signer_mismatch
         } catch (e: Exception) {
             log.warn("send failed user={} type={}: {}", userId, e::class.simpleName, e.message, e)
             call.respondError(

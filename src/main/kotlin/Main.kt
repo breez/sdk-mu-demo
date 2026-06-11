@@ -47,7 +47,7 @@ fun main(): Unit = runBlocking {
     val ds = buildDataSource(cfg)
     migrate(ds)
 
-    log.info("building shared SDK context (network={})", cfg.network)
+    log.info("building shared SDK context (network={}, signer={})", cfg.network, cfg.signer)
     val sharedCtx = buildSharedContext(cfg)
     val eventBus = EventBus()
     val sdk = SdkAccess(
@@ -56,7 +56,11 @@ fun main(): Unit = runBlocking {
         network = cfg.network,
         apiKey = cfg.breezApiKey,
         eventBus = eventBus,
+        signerMode = cfg.signer,
+        turnkey = cfg.turnkey,
+        ds = ds,
     )
+    val provisioner = cfg.turnkey?.let { TurnkeyProvisioner(it, cfg.network) }
 
     val optimizer = OptimizeQueue(sdk)
 
@@ -107,6 +111,16 @@ fun main(): Unit = runBlocking {
         }
 
         install(StatusPages) {
+            // A SIGNER flip on a live DB would otherwise serve users an
+            // empty wallet under different keys; fail loudly instead.
+            exception<SignerMismatchException> { call, cause ->
+                log.warn("signer mismatch: {}", cause.message)
+                call.respondError(
+                    HttpStatusCode.Conflict,
+                    ErrorCodes.SIGNER_MISMATCH,
+                    cause.message ?: "user provisioned under a different signer",
+                )
+            }
             exception<Throwable> { call, cause ->
                 log.error("uncaught: {}", cause.message, cause)
                 call.respondError(
@@ -127,7 +141,7 @@ fun main(): Unit = runBlocking {
             events(ds, eventBus)
             webhooks(cfg.webhookSecret, sdk, optimizer)
             rateLimit(CREATE_USER_LIMIT) {
-                users(ds, sdk, cfg)
+                users(ds, sdk, cfg, provisioner)
             }
         }
     }.start(wait = true)
