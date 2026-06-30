@@ -25,7 +25,7 @@ repositories {
 // to the in-tree `libraryVersion=0.1.0` when `LOCAL_SDK=1`.
 val sdkVersion: String = (findProperty("sdkVersion") as? String)
     ?: System.getenv("SDK_VERSION")
-    ?: "0.16.0-dev3"
+    ?: "0.18.0-dev1"
 
 dependencies {
     implementation("technology.breez.spark:breez-sdk-spark-kmp-jvm:$sdkVersion")

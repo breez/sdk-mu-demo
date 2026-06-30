@@ -35,6 +35,12 @@ import org.slf4j.LoggerFactory
  */
 class OptimizeQueue(
     private val sdk: SdkAccess,
+    // Leaf optimization is a swap, which needs SPARK_PREPARE_TRANSFER. Under
+    // turnkey delegated access the server's key is denied that activity (only
+    // the user's client can sign it), and the SDK exposes no way to hand the
+    // optimization package out for client signing — so background optimization
+    // is disabled in that mode and enqueue is a no-op.
+    private val enabled: Boolean = true,
     concurrency: Int = 4,
     private val timeout: Duration = 5.minutes,
 ) {
@@ -61,8 +67,10 @@ class OptimizeQueue(
         }
     }
 
-    /** Enqueue an optimize job for `userId`. No-op if already queued or running. */
+    /** Enqueue an optimize job for `userId`. No-op if disabled, or if already
+     * queued or running. */
     suspend fun enqueue(userId: String) {
+        if (!enabled) return
         val claimed = mutex.withLock { inflight.add(userId) }
         if (!claimed) {
             log.info("optimize enqueue user={} dropped (already queued/running)", userId)

@@ -3,6 +3,7 @@ import breez_sdk_spark.UpdateUserSettingsRequest
 import breez_sdk_spark.WebhookEventType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
+import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
@@ -14,9 +15,30 @@ import org.slf4j.LoggerFactory
 private val log = LoggerFactory.getLogger("Users")
 
 @Serializable
+data class CreateUserRequest(
+    /**
+     * The WebAuthn passkey the browser registered (Turnkey attestation).
+     * Required for SIGNER=turnkey — it becomes the sub-org's sole root user,
+     * the only credential that can authorize a send. Ignored for SIGNER=seed.
+     */
+    val passkey: PasskeyAttestation? = null,
+    /**
+     * The client's browser-held session public key (P-256, hex). Pre-authorized
+     * as a short-lived API key on the sub-org owner so swaps can be stamped
+     * silently right after sign-up — no second passkey tap. Turnkey only; absent
+     * for SIGNER=seed and tolerated if a client omits it (falls back to minting
+     * the session via a passkey tap on first use).
+     */
+    val session_public_key: String? = null,
+)
+
+@Serializable
 data class CreateUserResponse(
     val user_id: String,
     val api_key: String, // shown once
+    /** Turnkey sub-org the client talks to for client-side send signing.
+     * Null for SIGNER=seed. */
+    val turnkey_sub_org_id: String? = null,
 )
 
 /**
@@ -42,16 +64,29 @@ data class CreateUserResponse(
  */
 fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig, provisioner: TurnkeyProvisioner?) {
     post("/users") {
+        val body = try {
+            call.receive<CreateUserRequest>()
+        } catch (e: Exception) {
+            CreateUserRequest() // seed mode has no body; tolerate empty/malformed
+        }
         val userId = newUlid()
         val apiKey = "mu_" + crockfordEncode(randomBytes(32))
         val keyHash = sha256Hex(apiKey.toByteArray(Charsets.UTF_8))
 
-        val turnkeyWalletId: String? = if (cfg.signer == SignerMode.TURNKEY) {
+        val subOrg: SubOrgResult? = if (cfg.signer == SignerMode.TURNKEY) {
+            val passkey = body.passkey ?: run {
+                call.respondError(
+                    HttpStatusCode.BadRequest,
+                    ErrorCodes.BAD_REQUEST,
+                    "a passkey is required to provision a turnkey user",
+                )
+                return@post
+            }
             try {
                 checkNotNull(provisioner) { "SIGNER=turnkey without a TurnkeyProvisioner" }
-                    .createWallet(userId)
+                    .provision(userId, passkey, body.session_public_key)
             } catch (e: Exception) {
-                log.warn("turnkey wallet creation failed for {}: {}", userId, e.message)
+                log.warn("turnkey sub-org provisioning failed for {}: {}", userId, e.message)
                 call.respondError(
                     HttpStatusCode.BadGateway,
                     ErrorCodes.UPSTREAM_UNAVAILABLE,
@@ -64,7 +99,7 @@ fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig, provisioner: Tur
         }
 
         val webhookId: String = try {
-            sdk.withProvisionalUser(userId, turnkeyWalletId) {
+            sdk.withProvisionalUser(userId, subOrg?.subOrgId, subOrg?.walletId) {
                 it.updateUserSettings(
                     UpdateUserSettingsRequest(
                         sparkPrivateModeEnabled = true,
@@ -85,10 +120,10 @@ fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig, provisioner: Tur
                 ).webhookId
             }
         } catch (e: Exception) {
-            if (turnkeyWalletId != null) {
+            if (subOrg != null) {
                 log.warn(
-                    "user provisioning failed for {} (turnkey wallet {} orphaned, reap by name prefix): {}",
-                    userId, turnkeyWalletId, e.message,
+                    "user provisioning failed for {} (turnkey sub-org {} orphaned, reap by name prefix): {}",
+                    userId, subOrg.subOrgId, e.message,
                 )
             } else {
                 log.warn("user provisioning failed for {}: {}", userId, e.message)
@@ -103,18 +138,29 @@ fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig, provisioner: Tur
 
         ds.connection.use { conn ->
             conn.prepareStatement(
-                "INSERT INTO users (user_id, api_key_hash, webhook_id, signer, turnkey_wallet_id) VALUES (?, ?, ?, ?, ?)"
+                """INSERT INTO users
+                   (user_id, api_key_hash, webhook_id, signer,
+                    turnkey_wallet_id, turnkey_sub_org_id, turnkey_spark_address)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)"""
             ).use { ps ->
                 ps.setString(1, userId)
                 ps.setString(2, keyHash)
                 ps.setString(3, webhookId)
                 ps.setString(4, cfg.signer.name.lowercase())
-                ps.setString(5, turnkeyWalletId)
+                ps.setString(5, subOrg?.walletId)
+                ps.setString(6, subOrg?.subOrgId)
+                ps.setString(7, subOrg?.sparkAddress)
                 ps.executeUpdate()
             }
         }
 
-        call.respond(CreateUserResponse(user_id = userId, api_key = apiKey))
+        call.respond(
+            CreateUserResponse(
+                user_id = userId,
+                api_key = apiKey,
+                turnkey_sub_org_id = subOrg?.subOrgId,
+            )
+        )
     }
 }
 

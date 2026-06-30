@@ -31,6 +31,7 @@ import org.slf4j.LoggerFactory
 import routes.deposits
 import routes.events
 import routes.info
+import routes.login
 import routes.payments
 import routes.receive
 import routes.send
@@ -62,7 +63,9 @@ fun main(): Unit = runBlocking {
     )
     val provisioner = cfg.turnkey?.let { TurnkeyProvisioner(it, cfg.network) }
 
-    val optimizer = OptimizeQueue(sdk)
+    // Background leaf optimization swaps, which the server can't sign under
+    // turnkey delegated access (SPARK_PREPARE_TRANSFER is client-only).
+    val optimizer = OptimizeQueue(sdk, enabled = cfg.signer == SignerMode.SEED)
 
     Runtime.getRuntime().addShutdownHook(Thread {
         log.info("shutting down")
@@ -136,13 +139,14 @@ fun main(): Unit = runBlocking {
             info(ds, sdk)
             payments(ds, sdk)
             receive(ds, sdk)
-            send(ds, sdk, optimizer)
+            send(ds, sdk, optimizer, cfg)
             deposits(ds, sdk)
             events(ds, eventBus)
             webhooks(cfg.webhookSecret, sdk, optimizer)
             rateLimit(CREATE_USER_LIMIT) {
                 users(ds, sdk, cfg, provisioner)
             }
+            login(ds, cfg)
         }
     }.start(wait = true)
 }

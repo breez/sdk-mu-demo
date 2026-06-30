@@ -6,18 +6,43 @@ import java.net.URI
 enum class SignerMode { SEED, TURNKEY }
 
 /**
- * Turnkey API access for SIGNER=turnkey. One organization-level API keypair
- * stamps every request (provisioning here, signing inside the SDK). Use a
- * P-256 key — Turnkey's console default; the app's stamper signs it with
- * plain JCA and the SDK detects the curve from the key material.
+ * Turnkey API access for SIGNER=turnkey, under the delegated-access model
+ * (client-approved sends).
+ *
+ * Two P-256 keypairs, by design distinct:
+ *
+ *  - **parent admin** (`apiPublicKey`/`apiPrivateKey`, registered with the
+ *    parent `organizationId`) — used only to create a per-user
+ *    sub-organization at `POST /users`.
+ *  - **delegated** (`delegatedApiPublicKey`/`delegatedApiPrivateKey`) — the
+ *    backend's policy-scoped member of every sub-org. It signs the receive /
+ *    auth / FROST activities the SDK runs per request, but Turnkey policy
+ *    denies it `SPARK_PREPARE_TRANSFER`, so the server can never move funds
+ *    out; only the user's passkey can. It also stamps the one-time policy and
+ *    root-quorum setup during provisioning (while still a root user).
+ *
+ * They are distinct keypairs for blast radius, not because scoping needs it (a
+ * sub-org member is policy-scoped however its keypair is shared): the delegated
+ * key is hot (every request) while the admin key is used only at sign-up, so a
+ * delegated-key leak is contained to receive/FROST on existing sub-orgs and
+ * can't also spawn sub-orgs in the parent org. It also lets the rarely-used
+ * admin key be protected/rotated independently of the hot path later.
+ *
+ * P-256 because the app's stamper signs with plain JCA and the SDK detects the
+ * curve from the key material (the JDK doesn't ship secp256k1).
  */
 data class TurnkeySettings(
     val baseUrl: String,
+    /** Parent organization that owns the per-user sub-orgs. */
     val organizationId: String,
-    /** API public key (compressed, hex), registered with the organization. */
+    /** Parent admin API public key (compressed, hex). Creates sub-orgs. */
     val apiPublicKey: String,
-    /** API private key (hex scalar) used to stamp requests. */
+    /** Parent admin API private key (hex scalar). */
     val apiPrivateKey: String,
+    /** Delegated API public key (compressed, hex), enrolled in every sub-org. */
+    val delegatedApiPublicKey: String,
+    /** Delegated API private key (hex scalar). Per-request receive/auth signing. */
+    val delegatedApiPrivateKey: String,
 )
 
 /**
@@ -80,6 +105,8 @@ data class AppConfig(
                     organizationId = required("TURNKEY_ORG_ID"),
                     apiPublicKey = required("TURNKEY_API_PUBLIC_KEY"),
                     apiPrivateKey = required("TURNKEY_API_PRIVATE_KEY"),
+                    delegatedApiPublicKey = required("TURNKEY_DELEGATED_API_PUBLIC_KEY"),
+                    delegatedApiPrivateKey = required("TURNKEY_DELEGATED_API_PRIVATE_KEY"),
                 )
             } else {
                 null
