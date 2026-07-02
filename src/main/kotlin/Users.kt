@@ -98,8 +98,28 @@ fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig, provisioner: Tur
             null
         }
 
+        // One-time signer provisioning (turnkey only): materialize the identity
+        // account + export the ECIES/HMAC key ONCE here, then persist the blob so
+        // every later per-request signer init is network-free. The webhook
+        // connect below already builds the signer from it.
+        val provisioned: breez_sdk_spark.TurnkeyProvisionedSigner? = if (subOrg != null) {
+            try {
+                sdk.provisionSigner(subOrg.subOrgId, subOrg.walletId)
+            } catch (e: Exception) {
+                log.warn("turnkey signer provisioning failed for {}: {}", userId, e.message)
+                call.respondError(
+                    HttpStatusCode.BadGateway,
+                    ErrorCodes.UPSTREAM_UNAVAILABLE,
+                    "user provisioning failed, please retry",
+                )
+                return@post
+            }
+        } else {
+            null
+        }
+
         val webhookId: String = try {
-            sdk.withProvisionalUser(userId, subOrg?.subOrgId, subOrg?.walletId) {
+            sdk.withProvisionalUser(userId, subOrg?.subOrgId, subOrg?.walletId, provisioned) {
                 it.updateUserSettings(
                     UpdateUserSettingsRequest(
                         sparkPrivateModeEnabled = true,
@@ -140,8 +160,9 @@ fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig, provisioner: Tur
             conn.prepareStatement(
                 """INSERT INTO users
                    (user_id, api_key_hash, webhook_id, signer,
-                    turnkey_wallet_id, turnkey_sub_org_id, turnkey_spark_address)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)"""
+                    turnkey_wallet_id, turnkey_sub_org_id, turnkey_spark_address,
+                    turnkey_provisioned)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
             ).use { ps ->
                 ps.setString(1, userId)
                 ps.setString(2, keyHash)
@@ -150,6 +171,12 @@ fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig, provisioner: Tur
                 ps.setString(5, subOrg?.walletId)
                 ps.setString(6, subOrg?.subOrgId)
                 ps.setString(7, subOrg?.sparkAddress)
+                ps.setBytes(
+                    8,
+                    provisioned?.let {
+                        ProvisionCrypto.encrypt(cfg.masterSecret.toByteArray(Charsets.UTF_8), userId, it.bytes)
+                    },
+                )
                 ps.executeUpdate()
             }
         }

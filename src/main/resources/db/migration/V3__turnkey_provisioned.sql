@@ -1,0 +1,12 @@
+-- Persisted Turnkey signer provisioning blob. Produced once at user creation by
+-- the SDK's `provision_turnkey_signer` (materializes the enclave identity
+-- account, exports the non-Spark ECIES/HMAC key), it lets every later
+-- per-request signer be rebuilt with NO Turnkey round trips via
+-- `create_turnkey_signer(config, provisioned)`.
+--
+-- The blob is opaque, versioned and wallet-bound; it holds a scoped secret (a
+-- non-Spark key used only for local ECIES/HMAC — never funds or the Spark
+-- identity). Stored ENCRYPTED at rest (AES-256-GCM under a per-user key derived
+-- from MASTER_SECRET; see Crypto.kt). Set iff signer = 'turnkey'; a null value
+-- means "not yet provisioned" and is provisioned lazily on first use.
+ALTER TABLE users ADD COLUMN turnkey_provisioned BYTEA;
