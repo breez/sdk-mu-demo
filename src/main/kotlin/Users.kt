@@ -99,10 +99,10 @@ fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig, provisioner: Tur
         }
 
         // One-time signer provisioning (turnkey only): materialize the identity
-        // account + export the ECIES/HMAC key ONCE here, then persist the blob so
+        // accounts + fetch the identity pubkey ONCE here, then persist it so
         // every later per-request signer init is network-free. The webhook
-        // connect below already builds the signer from it.
-        val provisioned: breez_sdk_spark.TurnkeyProvisionedSigner? = if (subOrg != null) {
+        // connect below already builds the signer (seeded) from it.
+        val identityPubKey: String? = if (subOrg != null) {
             try {
                 sdk.provisionSigner(subOrg.subOrgId, subOrg.walletId)
             } catch (e: Exception) {
@@ -119,7 +119,7 @@ fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig, provisioner: Tur
         }
 
         val webhookId: String = try {
-            sdk.withProvisionalUser(userId, subOrg?.subOrgId, subOrg?.walletId, provisioned) {
+            sdk.withProvisionalUser(userId, subOrg?.subOrgId, subOrg?.walletId, identityPubKey) {
                 it.updateUserSettings(
                     UpdateUserSettingsRequest(
                         sparkPrivateModeEnabled = true,
@@ -161,7 +161,7 @@ fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig, provisioner: Tur
                 """INSERT INTO users
                    (user_id, api_key_hash, webhook_id, signer,
                     turnkey_wallet_id, turnkey_sub_org_id, turnkey_spark_address,
-                    turnkey_provisioned)
+                    turnkey_identity_pubkey)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
             ).use { ps ->
                 ps.setString(1, userId)
@@ -171,12 +171,7 @@ fun Route.users(ds: DataSource, sdk: SdkAccess, cfg: AppConfig, provisioner: Tur
                 ps.setString(5, subOrg?.walletId)
                 ps.setString(6, subOrg?.subOrgId)
                 ps.setString(7, subOrg?.sparkAddress)
-                ps.setBytes(
-                    8,
-                    provisioned?.let {
-                        ProvisionCrypto.encrypt(cfg.masterSecret.toByteArray(Charsets.UTF_8), userId, it.bytes)
-                    },
-                )
+                ps.setString(8, identityPubKey)
                 ps.executeUpdate()
             }
         }

@@ -1,0 +1,17 @@
+-- The wallet's identity public key (compressed secp256k1, 33 bytes → 66 hex
+-- chars), replacing the old provisioning blob as the value that makes per-request
+-- Turnkey signer init network-free.
+--
+-- Obtained once from a freshly-built (unseeded) signer via
+-- ExternalSparkSigner.get_identity_public_key(), then passed back on every later
+-- init as TurnkeyConfig.identity_public_key: the signer serves the identity key
+-- and its Spark address from this value instead of the per-init Turnkey
+-- round-trips. It is a stable, NON-secret, per-wallet value, so it is stored in
+-- the clear (unlike the encrypted turnkey_provisioned blob it supersedes).
+--
+-- Set iff signer = 'turnkey'; a null value means "not yet provisioned" (or a row
+-- predating this column) and is provisioned lazily on first use, then persisted.
+--
+-- The old turnkey_provisioned column (V3) is left in place, now unused by this
+-- build, so a rollback to the blob-based SDK still finds it.
+ALTER TABLE users ADD COLUMN turnkey_identity_pubkey VARCHAR(66);
