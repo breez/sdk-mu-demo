@@ -2,6 +2,7 @@ package routes
 
 import ErrorCodes
 import SdkAccess
+import SignerMismatchException
 import breez_sdk_spark.GetInfoRequest
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
@@ -29,6 +30,8 @@ fun Route.info(ds: DataSource, sdk: SdkAccess) {
         try {
             val resp = sdk.withUser(userId) { it.getInfo(GetInfoRequest(ensureSynced = false)) }
             call.respond(InfoResponse(balance_sats = resp.balanceSats.toLong()))
+        } catch (e: SignerMismatchException) {
+            throw e // StatusPages → 409 signer_mismatch
         } catch (e: Exception) {
             call.respondError(
                 HttpStatusCode.BadGateway,

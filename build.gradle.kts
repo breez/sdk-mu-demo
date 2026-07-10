@@ -25,7 +25,7 @@ repositories {
 // to the in-tree `libraryVersion=0.1.0` when `LOCAL_SDK=1`.
 val sdkVersion: String = (findProperty("sdkVersion") as? String)
     ?: System.getenv("SDK_VERSION")
-    ?: "0.16.0-dev3"
+    ?: "0.19.0-dev1"
 
 dependencies {
     implementation("technology.breez.spark:breez-sdk-spark-kmp-jvm:$sdkVersion")
@@ -34,6 +34,12 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+
+    // Turnkey's official request/response models (SIGNER=turnkey wallet
+    // provisioning). Only `types` is a plain JAR — the http/stamper packages
+    // are Android AARs — so transport is the JDK HttpClient and stamping is
+    // JCA (see Turnkey.kt).
+    implementation("com.turnkey:types:2.0.0")
 
     implementation("io.ktor:ktor-server-core-jvm:2.3.13")
     implementation("io.ktor:ktor-server-netty-jvm:2.3.13")
@@ -54,6 +60,12 @@ dependencies {
     implementation("org.postgresql:postgresql:42.7.4")
     implementation("org.flywaydb:flyway-core:10.20.1")
     implementation("org.flywaydb:flyway-database-postgresql:10.20.1")
+
+    testImplementation(kotlin("test"))
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 application {

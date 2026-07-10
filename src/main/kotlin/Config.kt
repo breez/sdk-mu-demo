@@ -1,6 +1,50 @@
 import breez_sdk_spark.Network
 import java.net.URI
 
+/** Which signer backend the deployment runs. Users record the mode they were
+ * provisioned with; requests hard-fail when the two disagree. */
+enum class SignerMode { SEED, TURNKEY }
+
+/**
+ * Turnkey API access for SIGNER=turnkey, under the delegated-access model
+ * (client-approved sends).
+ *
+ * Two P-256 keypairs, by design distinct:
+ *
+ *  - **parent admin** (`apiPublicKey`/`apiPrivateKey`, registered with the
+ *    parent `organizationId`) — used only to create a per-user
+ *    sub-organization at `POST /users`.
+ *  - **delegated** (`delegatedApiPublicKey`/`delegatedApiPrivateKey`) — the
+ *    backend's policy-scoped member of every sub-org. It signs the receive /
+ *    auth / FROST activities the SDK runs per request, but Turnkey policy
+ *    denies it `SPARK_PREPARE_TRANSFER`, so the server can never move funds
+ *    out; only the user's passkey can. It also stamps the one-time policy and
+ *    root-quorum setup during provisioning (while still a root user).
+ *
+ * They are distinct keypairs for blast radius, not because scoping needs it (a
+ * sub-org member is policy-scoped however its keypair is shared): the delegated
+ * key is hot (every request) while the admin key is used only at sign-up, so a
+ * delegated-key leak is contained to receive/FROST on existing sub-orgs and
+ * can't also spawn sub-orgs in the parent org. It also lets the rarely-used
+ * admin key be protected/rotated independently of the hot path later.
+ *
+ * P-256 because the app's stamper signs with plain JCA and the SDK detects the
+ * curve from the key material (the JDK doesn't ship secp256k1).
+ */
+data class TurnkeySettings(
+    val baseUrl: String,
+    /** Parent organization that owns the per-user sub-orgs. */
+    val organizationId: String,
+    /** Parent admin API public key (compressed, hex). Creates sub-orgs. */
+    val apiPublicKey: String,
+    /** Parent admin API private key (hex scalar). */
+    val apiPrivateKey: String,
+    /** Delegated API public key (compressed, hex), enrolled in every sub-org. */
+    val delegatedApiPublicKey: String,
+    /** Delegated API private key (hex scalar). Per-request receive/auth signing. */
+    val delegatedApiPrivateKey: String,
+)
+
 /**
  * App config, loaded once at boot from env. Fails fast on missing required
  * vars. `.env.example` documents every field.
@@ -23,6 +67,9 @@ data class AppConfig(
      * so the pool size doesn't silently track the host's core count.
      */
     val sdkPgMaxPoolSize: Int?,
+    val signer: SignerMode,
+    /** Non-null iff signer == TURNKEY. */
+    val turnkey: TurnkeySettings?,
 ) {
     /** Hikari + Flyway want a jdbc:* URL with credentials supplied separately. */
     val postgres: PostgresDsn = PostgresDsn.parse(databaseUrl)
@@ -45,6 +92,26 @@ data class AppConfig(
                 error("BREEZ_API_KEY is required on mainnet")
             }
 
+            val signerStr = env("SIGNER")?.takeIf { it.isNotBlank() }?.lowercase() ?: "seed"
+            val signer = when (signerStr) {
+                "seed" -> SignerMode.SEED
+                "turnkey" -> SignerMode.TURNKEY
+                else -> error("SIGNER must be 'seed' or 'turnkey'; got '$signerStr'")
+            }
+            val turnkey = if (signer == SignerMode.TURNKEY) {
+                TurnkeySettings(
+                    baseUrl = env("TURNKEY_BASE_URL")?.takeIf { it.isNotBlank() }?.trimEnd('/')
+                        ?: "https://api.turnkey.com",
+                    organizationId = required("TURNKEY_ORG_ID"),
+                    apiPublicKey = required("TURNKEY_API_PUBLIC_KEY"),
+                    apiPrivateKey = required("TURNKEY_API_PRIVATE_KEY"),
+                    delegatedApiPublicKey = required("TURNKEY_DELEGATED_API_PUBLIC_KEY"),
+                    delegatedApiPrivateKey = required("TURNKEY_DELEGATED_API_PRIVATE_KEY"),
+                )
+            } else {
+                null
+            }
+
             return AppConfig(
                 network = network,
                 databaseUrl = required("DATABASE_URL"),
@@ -63,6 +130,8 @@ data class AppConfig(
                     it.toIntOrNull()?.takeIf { n -> n > 0 }
                         ?: error("SDK_PG_MAX_POOL_SIZE must be a positive integer; got '$it'")
                 },
+                signer = signer,
+                turnkey = turnkey,
             )
         }
     }

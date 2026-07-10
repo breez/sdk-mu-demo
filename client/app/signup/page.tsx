@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, loadCreds, saveCreds } from "../../lib/api";
+import { turnkeyEnabled, registerPasskey, loginWithExistingPasskey, createSessionPublicKey } from "../../lib/turnkey";
 import GlowLogo from "../../components/GlowLogo";
 import { FormError } from "../../components/ui";
 
@@ -25,11 +26,55 @@ export default function Signup() {
     setBusy(true);
     setErr(null);
     try {
-      const c = await api.createUser();
-      saveCreds({ user_id: c.user_id, api_key: c.api_key });
+      // Turnkey deployments: register a passkey first — it becomes the sub-org's
+      // sole root user and the only credential that can authorize a send. Name it
+      // distinguishably so repeated sign-ups don't all show as identical
+      // "glow-wallet" entries in the OS passkey picker.
+      const passkey = turnkeyEnabled
+        ? await registerPasskey(`Glow ${new Date().toISOString().slice(0, 16).replace("T", " ")}`)
+        : undefined;
+      // Generate the browser-held session key (no prompt) and send its public key
+      // with sign-up. The server pre-authorizes it on the new wallet, so swaps
+      // are stamped silently afterward without a second passkey tap — the passkey
+      // prompt above (registering the passkey) is the only one. The session only
+      // stamps swaps; the actual send always prompts the passkey. Once the
+      // session key expires, ensureSession mints a fresh one on the next send.
+      const sessionPublicKey = turnkeyEnabled ? await createSessionPublicKey() : undefined;
+      const c = await api.createUser(passkey, sessionPublicKey);
+      saveCreds({
+        user_id: c.user_id,
+        api_key: c.api_key,
+        turnkey_sub_org_id: c.turnkey_sub_org_id ?? null,
+        turnkey_credential_id: passkey?.attestation.credentialId ?? null,
+      });
       router.replace("/");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Signup failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Turnkey deployments: re-authenticate an existing wallet with its passkey and
+  // mint a fresh api_key. Lets a returning user (cleared storage / new device)
+  // get back into their wallet instead of being forced to create a new one.
+  const logIn = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const { sessionJwt, credentialId } = await loginWithExistingPasskey();
+      const c = await api.login(sessionJwt);
+      saveCreds({
+        user_id: c.user_id,
+        api_key: c.api_key,
+        turnkey_sub_org_id: c.turnkey_sub_org_id,
+        // Pin future sends to the passkey this login used, so a device holding
+        // several "Glow" passkeys doesn't show an unpinned picker on the next send.
+        turnkey_credential_id: credentialId,
+      });
+      router.replace("/");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Login failed");
     } finally {
       setBusy(false);
     }
@@ -66,6 +111,15 @@ export default function Signup() {
           <button onClick={create} disabled={busy} className="button w-full py-4 text-base tracking-wider">
             {busy ? "Creating…" : "Get Started"}
           </button>
+          {turnkeyEnabled && (
+            <button
+              onClick={logIn}
+              disabled={busy}
+              className="w-full py-3 text-sm tracking-wider text-spark-text-secondary hover:text-spark-text-primary transition-colors"
+            >
+              Already have a wallet? Log in
+            </button>
+          )}
           <FormError error={err} />
           <p className="text-spark-text-muted text-xs text-center leading-relaxed">
             Creates a wallet on the server and stores the API key in this browser. Don&apos;t use this for real funds.

@@ -2,6 +2,7 @@ package routes
 
 import ErrorCodes
 import SdkAccess
+import SignerMismatchException
 import breez_sdk_spark.ClaimDepositRequest
 import breez_sdk_spark.DepositInfo
 import breez_sdk_spark.Fee
@@ -66,6 +67,8 @@ fun Route.deposits(ds: DataSource, sdk: SdkAccess) {
             // (empty UniFFI record) — passed by name, no `()`.
             val resp = sdk.withUser(userId) { it.listUnclaimedDeposits(ListUnclaimedDepositsRequest) }
             call.respond(ListDepositsResponse(deposits = resp.deposits.map { it.toDto() }))
+        } catch (e: SignerMismatchException) {
+            throw e // StatusPages → 409 signer_mismatch
         } catch (e: Exception) {
             call.respondError(
                 HttpStatusCode.BadGateway,
@@ -97,6 +100,8 @@ fun Route.deposits(ds: DataSource, sdk: SdkAccess) {
                 )
             }
             call.respond(ClaimDepositResponseBody(payment = resp.payment.toDto()))
+        } catch (e: SignerMismatchException) {
+            throw e // StatusPages → 409 signer_mismatch
         } catch (e: Exception) {
             call.respondError(
                 HttpStatusCode.BadGateway,
@@ -135,6 +140,8 @@ fun Route.deposits(ds: DataSource, sdk: SdkAccess) {
                 )
             }
             call.respond(RefundDepositResponseBody(tx_id = resp.txId, tx_hex = resp.txHex))
+        } catch (e: SignerMismatchException) {
+            throw e // StatusPages → 409 signer_mismatch
         } catch (e: Exception) {
             call.respondError(
                 HttpStatusCode.BadGateway,

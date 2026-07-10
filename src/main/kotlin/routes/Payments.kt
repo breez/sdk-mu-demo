@@ -2,6 +2,7 @@ package routes
 
 import ErrorCodes
 import SdkAccess
+import SignerMismatchException
 import breez_sdk_spark.GetPaymentRequest
 import breez_sdk_spark.ListPaymentsRequest
 import breez_sdk_spark.PaymentStatus
@@ -70,6 +71,8 @@ fun Route.payments(ds: DataSource, sdk: SdkAccess) {
             // page exactly, hint the client there may be more.
             val nextOffset = if (dtos.size == limit) offset + limit else null
             call.respond(ListPaymentsResponse(payments = dtos, next_offset = nextOffset))
+        } catch (e: SignerMismatchException) {
+            throw e // StatusPages → 409 signer_mismatch
         } catch (e: Exception) {
             call.respondError(
                 HttpStatusCode.BadGateway,
@@ -89,6 +92,8 @@ fun Route.payments(ds: DataSource, sdk: SdkAccess) {
         try {
             val resp = sdk.withUser(userId) { it.getPayment(GetPaymentRequest(paymentId = paymentId)) }
             call.respond(GetPaymentResponse(payment = resp.payment.toDto()))
+        } catch (e: SignerMismatchException) {
+            throw e // StatusPages → 409 signer_mismatch
         } catch (e: Exception) {
             val msg = e.message.orEmpty()
             val isNotFound = msg.contains("not found", ignoreCase = true) ||

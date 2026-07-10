@@ -21,9 +21,6 @@ client on Vercel) so a team can actually try it.
 ## Non-goals (v1)
 
 - Spark addresses, Spark invoices, LNURL, lightning addresses.
-- External signer integration (Turnkey etc.) — postponed; seed is
-  derived in-process from `MASTER_SECRET`. Refactor when the SDK's
-  signer story stabilizes.
 - HA, k8s, Prometheus dashboards, alerting, runbooks.
 - KYC, billing, rate limiting (beyond trivial), abuse mitigation.
 - User deletion / wallet sweep / disable flow.
@@ -99,6 +96,69 @@ Rules — codified in code, called out in README:
 - **Always disconnect.** `try/finally`. Flushes outstanding writes.
 - **One SDK per request, never pinned to a worker thread.**
 
+## Signers
+
+Deployment-wide toggle: `SIGNER=seed` (default) or `SIGNER=turnkey`.
+
+- **seed** — per-user entropy derived in-process:
+  `HMAC-SHA512(MASTER_SECRET, user_id)`. One env secret, zero external
+  dependencies. Compromise of the host exposes every user's keys. The
+  server signs and sends on the user's behalf (`prepare` → `send`).
+- **turnkey** — **client-approved sends.** Keys live in Turnkey; the
+  server can receive autonomously but cannot send without the user's
+  passkey. Sends use the SDK's client-signing split (`prepare` builds an
+  unsigned package → client signs → `publish`).
+
+### Delegated access (turnkey)
+
+Each user is a Turnkey **sub-organization** whose sole root user is a
+passkey registered in the user's browser. The server holds a separate,
+policy-scoped **delegated API key** that is a member of every sub-org but
+is *not* in the root quorum. Provisioning (`POST /users`, parent admin
+key) runs three activities:
+
+1. `CREATE_SUB_ORGANIZATION_V8` — passkey root user (carrying a
+   short-lived session API key, the browser-held key that stamps swaps
+   silently, so sign-up needs no second passkey tap) + delegated API-key
+   user + wallet seeding *both* identity-account formats (compressed
+   ECDSA + Spark Schnorr — a second format can't be added to an occupied
+   path later).
+2. `CREATE_POLICY` — ALLOW the delegated user only the receive/auth
+   activities (`SPARK_SIGN_FROST`, `SPARK_CLAIM_TRANSFER`,
+   `SPARK_PREPARE_LIGHTNING_RECEIVE`, `SIGN_RAW_PAYLOAD_V2`).
+3. `UPDATE_ROOT_QUORUM` — drop the delegated user from root, leaving the
+   passkey as sole root.
+
+Non-root users default-deny, so the delegated key is **denied
+`SPARK_PREPARE_TRANSFER`**. That is the security boundary: a send's
+transfer package can only be signed by the passkey. This is an
+activity-level 2-of-2 — the server signs `SPARK_SIGN_FROST` (refunds) on
+the delegated key at publish, the client signs `SPARK_PREPARE_TRANSFER`
+with the passkey; neither can move funds alone.
+
+The client uses the **Turnkey SDK only** (`@turnkey/sdk-browser`), never
+the Breez SDK: it maps the server's transfer payload to a
+`SPARK_PREPARE_TRANSFER` activity, stamps it (passkey for the send,
+read-write session for silent swaps + activity polling), and returns the
+signature for the server to `publish`. Swaps loop client-side: a
+`swap_completed` publish response means re-prepare and sign the next
+package.
+
+Other turnkey specifics:
+
+- **Transport.** Server-side, the `X-Stamp` header is plain JCA, which is
+  why the API keys must be P-256 (Turnkey's `http`/`stamper` packages are
+  Android AARs; the JDK doesn't ship secp256k1). Requests use Turnkey's
+  official `com.turnkey:types` `@Serializable` models; results are parsed
+  structurally from the JSON (by key) so versioned/renamed result fields
+  don't break decoding.
+- **Signers rebuilt per request.** No cache, matching the stateless
+  per-request lifecycle. The per-request SDK is built with the delegated
+  key against the user's sub-org.
+- **Mode mismatch fails loudly.** Users record the signer they were
+  provisioned with; a request under the other mode is a 409
+  `signer_mismatch`, not an empty wallet under freshly derived keys.
+
 ## API surface
 
 All `/users/{id}/...` endpoints require `Authorization: Bearer <api_key>`.
@@ -117,10 +177,15 @@ POST   /users/{id}/payments/send/prepare
        # method inferred from payment_request:
        #   bolt11 invoice → "bolt11"
        #   btc address    → "onchain"
-POST   /users/{id}/payments/send
+       # turnkey: also returns { kind, sign_with, transfer } — the
+       #   SPARK_PREPARE_TRANSFER material for the client to sign.
+POST   /users/{id}/payments/send          # SIGNER=seed only (409 under turnkey)
        { prepare_id }
        headers: Idempotency-Key (optional, passed to SDK)
        → { payment_id, status, fee_sats }
+POST   /users/{id}/payments/send/publish  # SIGNER=turnkey only (409 under seed)
+       { prepare_id, signed }             # signed = client SPARK_PREPARE_TRANSFER
+       → { payment_id, status, fee_sats } # or { swap_completed: true } → re-prepare
 
 POST   /users/{id}/payments/receive
        { method: "bolt11" | "onchain", amount_sats?, description?, expiry_secs? }
@@ -151,7 +216,7 @@ GET    /readyz                              # readiness (db ping + shared-ctx ok
 
 Errors: `{ error: { code, message } }`. Stable codes
 (`unauthorized`, `forbidden`, `not_found`, `bad_request`,
-`upstream_unavailable`, `internal`).
+`upstream_unavailable`, `signer_mismatch`, `internal`).
 
 ### prepare_id
 
@@ -242,6 +307,13 @@ holding a worker permit indefinitely.
 - **Auto-optimize disabled.** `LeafOptimizationConfig.autoEnabled =
   false`. The SDK's built-in auto-optimizer relies on a long-lived
   connection that the per-request `withUser` pattern doesn't provide.
+- **Disabled entirely under turnkey.** Leaf optimization is a swap, which
+  needs `SPARK_PREPARE_TRANSFER` — an activity the delegated key is denied
+  (only the user's client can sign it), and the SDK exposes no way to hand
+  the optimization package out for client signing. So `OptimizeQueue` is
+  constructed with `enabled = false` when `SIGNER=turnkey`, making
+  `enqueue` a no-op at every call site. Wallets still optimize their leaves
+  as a side effect of client-signed sends.
 
 In-memory is enough for v1: a process restart drops queued jobs; the
 next payment for that user re-enqueues. The worker uses the same
@@ -256,12 +328,17 @@ App-owned tables, kept separate from SDK tables (which live in the same
 DB but are SDK-managed and we never touch them):
 
 ```sql
--- v1__users.sql
+-- v1__users.sql + v2__signer.sql
 CREATE TABLE users (
-    user_id        VARCHAR(64)  PRIMARY KEY,             -- ULID
-    api_key_hash   CHAR(64)     NOT NULL UNIQUE,         -- SHA-256(api_key)
-    created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    webhook_id     VARCHAR(64)                           -- from SDK, for unregister
+    user_id                  VARCHAR(64)  PRIMARY KEY,           -- ULID
+    api_key_hash             CHAR(64)     NOT NULL UNIQUE,       -- SHA-256(api_key)
+    created_at               TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    webhook_id               VARCHAR(64),                        -- from SDK, for unregister
+    signer                   VARCHAR(16)  NOT NULL DEFAULT 'seed', -- provisioning-time SIGNER
+    turnkey_wallet_id        VARCHAR(64),                        -- set iff signer = 'turnkey'
+    turnkey_sub_org_id       VARCHAR(64),                        -- user's sub-organization
+    turnkey_delegated_user_id VARCHAR(64),                       -- server's policy-scoped member
+    turnkey_spark_address    VARCHAR(128)                        -- cached Spark address
 );
 CREATE INDEX idx_users_created_at ON users (created_at);
 ```
@@ -297,6 +374,16 @@ All via env. `.env.example` committed. Production: Fly secrets.
 | `PORT` | no | `8080` | |
 | `CORS_ORIGINS` | no | empty | Comma-sep; client origin in deployed mode |
 | `LOG_LEVEL` | no | `info` | |
+| `SIGNER` | no | `seed` | `seed` \| `turnkey` (see Signers) |
+| `TURNKEY_ORG_ID` | turnkey | — | Parent org; admin key creates sub-orgs |
+| `TURNKEY_API_PUBLIC_KEY` | turnkey | — | Parent admin, P-256 compressed hex |
+| `TURNKEY_API_PRIVATE_KEY` | turnkey | — | Parent admin, P-256 scalar hex |
+| `TURNKEY_DELEGATED_API_PUBLIC_KEY` | turnkey | — | Delegated key, P-256 compressed hex |
+| `TURNKEY_DELEGATED_API_PRIVATE_KEY` | turnkey | — | Delegated key, P-256 scalar hex |
+| `TURNKEY_BASE_URL` | no | `https://api.turnkey.com` | |
+| `NEXT_PUBLIC_TURNKEY_ORG_ID` | turnkey (client) | — | Parent org id; hosts passkey registration |
+| `NEXT_PUBLIC_TURNKEY_RP_ID` | turnkey (client) | — | WebAuthn RP id (e.g. `localhost` or domain) |
+| `NEXT_PUBLIC_TURNKEY_API_BASE_URL` | no | `https://api.turnkey.com` | Browser → Turnkey direct |
 
 ## Build & local dev
 

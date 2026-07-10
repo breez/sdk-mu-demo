@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import dynamic from "next/dynamic";
 import { api, type Creds, type Prepare } from "../../lib/api";
+import { ensureSession, signSparkPrepareTransfer } from "../../lib/turnkey";
 import { BottomSheetContainer } from "../../components/BottomSheet";
 import {
   DialogHeader,
@@ -122,12 +123,46 @@ const SendDialog: React.FC<SendDialogProps> = ({ isOpen, onClose, creds, onSent,
     }
   };
 
+  // Turnkey deployments: sign each SPARK_PREPARE_TRANSFER package client-side
+  // and publish it. A `swap_completed` response means a denomination swap
+  // settled and we re-prepare + sign the next package — the swap loop, one
+  // round trip at a time. The session stamps swaps silently (pre-authorized at
+  // sign-up, so usually no prompt; only a re-auth tap once it expires); the
+  // actual send always gets its own passkey tap.
+  const runClientSignedSend = async (): Promise<{ payment_id: string; status: string }> => {
+    const subOrgId = creds.turnkey_sub_org_id!;
+    await ensureSession(subOrgId, creds.turnkey_credential_id);
+    let p: Prepare = prepared!;
+    for (let i = 0; i < 10; i++) {
+      const signed = await signSparkPrepareTransfer(
+        subOrgId,
+        p.sign_with!,
+        p.transfer!,
+        p.kind!,
+        creds.turnkey_credential_id,
+      );
+      const r = await api.publishSend(creds.user_id, creds.api_key, p.prepare_id, signed);
+      if (r.swap_completed) {
+        p = await api.prepareSend(creds.user_id, creds.api_key, {
+          payment_request: paymentRequest.trim(),
+          amount_sats: amount ? Number(amount) : undefined,
+        });
+        continue;
+      }
+      return { payment_id: r.payment_id!, status: r.status! };
+    }
+    throw new Error("Send did not converge after repeated denomination swaps");
+  };
+
   const doSend = async () => {
     if (!prepared) return;
     setStep("processing");
     setErr(null);
     try {
-      const r = await api.send(creds.user_id, creds.api_key, prepared.prepare_id);
+      const clientSigned = !!(prepared.kind && creds.turnkey_sub_org_id);
+      const r = clientSigned
+        ? await runClientSignedSend()
+        : await api.send(creds.user_id, creds.api_key, prepared.prepare_id);
       let status: "completed" | "failed" | "timeout" = r.status as "completed" | "failed" | "timeout";
       if (r.status !== "completed" && r.status !== "failed") {
         status = await awaitPayment(r.payment_id);
@@ -162,6 +197,10 @@ const SendDialog: React.FC<SendDialogProps> = ({ isOpen, onClose, creds, onSent,
   };
 
   const total = prepared ? prepared.amount_sats + prepared.fee_sats : 0;
+
+  // Long addresses/invoices: keep the ends (the part a user verifies) visible.
+  const truncateMiddle = (s: string, head = 14, tail = 10) =>
+    s.length <= head + tail + 1 ? s : `${s.slice(0, head)}…${s.slice(-tail)}`;
 
   return (
     <>
@@ -237,6 +276,12 @@ const SendDialog: React.FC<SendDialogProps> = ({ isOpen, onClose, creds, onSent,
 
             <PaymentInfoCard>
               <PaymentInfoRow label="Method" value={prepared.method} />
+              {prepared.destination && (
+                <PaymentInfoRow
+                  label="To"
+                  value={<span className="font-mono text-xs">{truncateMiddle(prepared.destination)}</span>}
+                />
+              )}
               <PaymentInfoRow
                 label="Amount"
                 value={

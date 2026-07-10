@@ -3,6 +3,7 @@ package routes
 import ErrorCodes
 import OptimizeQueue
 import SdkAccess
+import SignerMismatchException
 import breez_sdk_spark.SyncWalletRequest
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
@@ -68,6 +69,8 @@ fun Route.webhooks(webhookSecret: String, sdk: SdkAccess, optimizer: OptimizeQue
         val syncStart = System.currentTimeMillis()
         try {
             sdk.withUser(userId) { it.syncWallet(SyncWalletRequest) }
+        } catch (e: SignerMismatchException) {
+            throw e // StatusPages → 409 signer_mismatch
         } catch (e: Exception) {
             // Return 5xx so the SSP retries the delivery.
             log.warn("webhook sync failed user={}: {}", userId, e.message)

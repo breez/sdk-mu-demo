@@ -59,6 +59,37 @@ Gradle build picks up that local artifact instead of the published one.
 The Docker image is built against the published SDK only; iterate via
 `make run`.
 
+#### Client-signed sends (`SIGNER=turnkey`)
+
+By default per-user wallet seeds are derived in-process from
+`MASTER_SECRET`. Set `SIGNER=turnkey` to keep all keys in
+[Turnkey](https://www.turnkey.com)'s enclave instead. `POST /users`
+creates a per-user Turnkey sub-organization whose sole root user is a
+passkey registered in the browser, plus a policy-scoped delegated API
+key the server holds. The delegated key can receive and claim
+autonomously but is denied `SPARK_PREPARE_TRANSFER`, so **sends are
+signed in the browser with the passkey** (`prepare` → client signs →
+`publish`) and the server can never move funds out. See DESIGN.md for
+the full flow.
+
+Setup:
+
+1. Create a Turnkey organization and two **P-256** API keys (the console
+   default — the server stamps with plain JCA, which doesn't do
+   secp256k1): an admin key that provisions sub-orgs, and a delegated key
+   that is the per-sub-org receive/claim member.
+2. Server (`.env`): `SIGNER=turnkey`, `TURNKEY_ORG_ID`,
+   `TURNKEY_API_PUBLIC_KEY`, `TURNKEY_API_PRIVATE_KEY`,
+   `TURNKEY_DELEGATED_API_PUBLIC_KEY`, `TURNKEY_DELEGATED_API_PRIVATE_KEY`.
+3. Client (`client/.env.local`): `NEXT_PUBLIC_TURNKEY_ORG_ID` (the same
+   parent org), `NEXT_PUBLIC_TURNKEY_RP_ID` (the site's hostname —
+   `localhost` for dev, the deployed domain in prod), and
+   `NEXT_PUBLIC_TURNKEY_API_BASE_URL`.
+4. Run as usual. Users provisioned in one mode are refused under the
+   other (`409 signer_mismatch`) — the keys differ, so flipping
+   `SIGNER` on a live DB would otherwise present empty wallets.
+
+
 #### Webhooks locally
 
 The webhook handler needs a public URL the SSP can reach. Tunnel with
@@ -208,9 +239,8 @@ sheet:
 ## Out of scope (v1)
 
 Spark addresses + Spark invoices, LNURL / lightning addresses, token
-payments, external signer integration, HA / Prometheus / alerting, KYC
-or billing, account deletion. See `DESIGN.md` "Non-goals" for the full
-list.
+payments, HA / Prometheus / alerting, KYC or billing, account
+deletion. See `DESIGN.md` "Non-goals" for the full list.
 
 ## Project layout
 

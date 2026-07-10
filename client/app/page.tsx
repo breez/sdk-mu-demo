@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, clearCreds, loadCreds, type Creds, type Deposit, type Payment } from "../lib/api";
+import { api, clearCreds, loadCreds, HttpError, type ApiError, type Creds, type Deposit, type Payment } from "../lib/api";
+import { clearTurnkeySession } from "../lib/turnkey";
 import { useEvents } from "../lib/events";
 import CollapsingWalletHeader from "../components/CollapsingWalletHeader";
 import TransactionList from "../components/TransactionList";
@@ -43,23 +44,45 @@ export default function WalletPage() {
   // payment_succeeded may arrive more than once across reconnects.
   const shownPaymentIds = useRef<Set<string>>(new Set());
 
-  const refetch = useCallback(async (c: Creds) => {
-    try {
-      const [info, list, dep] = await Promise.all([
-        api.info(c.user_id, c.api_key),
-        api.listPayments(c.user_id, c.api_key, { limit: PAGE }),
-        api.listUnclaimedDeposits(c.user_id, c.api_key).catch(() => ({ deposits: [] })),
-      ]);
-      setBalanceSats(info.balance_sats);
-      setPayments(list.payments);
-      setNextOffset(list.next_offset);
-      setDeposits(dep.deposits);
-    } catch {
-      /* keep last known state */
-    } finally {
-      setIsSyncing(false);
-    }
-  }, []);
+  // Clear app creds + the Turnkey session/key and return to sign-up. Shared by
+  // the menu's Logout and the auto-logout below.
+  const logout = useCallback(
+    async (c: Creds | null) => {
+      await clearTurnkeySession(c?.turnkey_sub_org_id ?? undefined);
+      clearCreds();
+      router.replace("/signup");
+    },
+    [router]
+  );
+
+  const refetch = useCallback(
+    async (c: Creds) => {
+      try {
+        const [info, list, dep] = await Promise.all([
+          api.info(c.user_id, c.api_key),
+          api.listPayments(c.user_id, c.api_key, { limit: PAGE }),
+          api.listUnclaimedDeposits(c.user_id, c.api_key).catch(() => ({ deposits: [] })),
+        ]);
+        setBalanceSats(info.balance_sats);
+        setPayments(list.payments);
+        setNextOffset(list.next_offset);
+        setDeposits(dep.deposits);
+      } catch (e) {
+        // A session from the other signer mode (e.g. a seed-mode wallet after the
+        // deployment switched to turnkey) gets 409 signer_mismatch on every call
+        // — these creds can never work here, so drop them and bounce to sign-up
+        // for a wallet that matches this deployment.
+        if (e instanceof HttpError && e.status === 409 && (e.body as ApiError)?.error?.code === "signer_mismatch") {
+          await logout(c);
+          return;
+        }
+        /* otherwise keep last known state */
+      } finally {
+        setIsSyncing(false);
+      }
+    },
+    [logout]
+  );
 
   useEffect(() => {
     const c = loadCreds();
@@ -141,10 +164,7 @@ export default function WalletPage() {
     }
   }, []);
 
-  const handleLogout = () => {
-    clearCreds();
-    router.replace("/signup");
-  };
+  const handleLogout = () => logout(creds);
 
   const refresh = useCallback(() => {
     if (creds) refetch(creds);

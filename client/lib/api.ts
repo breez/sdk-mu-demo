@@ -63,8 +63,58 @@ async function call<T>(
 
 // --- shapes ----------------------------------------------------------------
 
-export type CreateUser = { user_id: string; api_key: string };
+export type CreateUser = {
+  user_id: string;
+  api_key: string;
+  // Present only when the deployment runs SIGNER=turnkey (client-signed sends).
+  turnkey_sub_org_id?: string | null;
+};
 export type Info = { balance_sats: number };
+
+// Returned by POST /login: a freshly minted api_key for an existing wallet,
+// re-authenticated via its Turnkey session JWT.
+export type Login = {
+  user_id: string;
+  api_key: string;
+  turnkey_sub_org_id: string;
+};
+
+// The WebAuthn passkey attestation the browser registers at sign-up, relayed
+// into the user's Turnkey sub-org as its sole root user. Field names match the
+// server's PasskeyAttestation / Turnkey's authenticator schema.
+export type PasskeyAttestation = {
+  authenticatorName?: string;
+  challenge: string;
+  attestation: {
+    credentialId: string;
+    clientDataJson: string;
+    attestationObject: string;
+    transports: string[];
+  };
+};
+
+// The SPARK_PREPARE_TRANSFER material the server hands the client to sign.
+export type TransferDto = {
+  transfer_id: string;
+  receiver_public_key: string; // hex
+  threshold: number;
+  leaves: { leaf_id: string; new_leaf_id: string }[];
+  operator_recipients: { operator_id: string; encryption_public_key: string }[];
+};
+
+// The signed result the client returns to the server (publish).
+export type SignedTransferDto = {
+  operator_packages: { operator_id: string; encrypted_package: string }[];
+  new_leaf_keys: { leaf_id: string; public_key: string }[];
+  transfer_user_signature: string; // hex, 64-byte compact r||s
+};
+
+export type PublishResult = {
+  swap_completed?: boolean;
+  payment_id?: string;
+  status?: string;
+  fee_sats?: number;
+};
 
 export type Payment = {
   id: string;
@@ -86,6 +136,13 @@ export type Prepare = {
   method: "bolt11" | "onchain";
   amount_sats: number;
   fee_sats: number;
+  // Present only under SIGNER=turnkey (client-signed sends).
+  kind?: "transfer" | "swap";
+  sign_with?: string;
+  transfer?: TransferDto;
+  // The invoice/address the payment pays — shown at approval. Set for the send
+  // leg and any preceding swap alike, so the review card always shows it.
+  destination?: string;
 };
 
 export type SendResult = {
@@ -109,8 +166,23 @@ export type Deposit = {
 // --- methods --------------------------------------------------------------
 
 export const api = {
-  createUser: () =>
-    call<CreateUser>("/users", { method: "POST", body: "{}" }),
+  // `passkey` is required when the deployment runs SIGNER=turnkey (it becomes
+  // the sub-org's root user); `sessionPublicKey` is the browser-held session key
+  // pre-authorized on the wallet so swaps need no extra tap. Both omitted for
+  // SIGNER=seed.
+  createUser: (passkey?: PasskeyAttestation, sessionPublicKey?: string) =>
+    call<CreateUser>("/users", {
+      method: "POST",
+      body: JSON.stringify({
+        ...(passkey ? { passkey } : {}),
+        ...(sessionPublicKey ? { session_public_key: sessionPublicKey } : {}),
+      }),
+    }),
+
+  // Turnkey deployments: re-authenticate an existing wallet with its passkey
+  // (the session JWT) and get a fresh api_key.
+  login: (sessionJwt: string) =>
+    call<Login>("/login", { method: "POST", body: JSON.stringify({ session_jwt: sessionJwt }) }),
 
   info: (userId: string, apiKey: string) =>
     call<Info>(`/users/${userId}/info`, { apiKey }),
@@ -146,6 +218,7 @@ export const api = {
       apiKey,
     }),
 
+  // Seed deployments: the server signs and sends.
   send: (
     userId: string,
     apiKey: string,
@@ -157,6 +230,21 @@ export const api = {
       body: JSON.stringify({ prepare_id: prepareId }),
       apiKey,
       headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {},
+    }),
+
+  // Turnkey deployments: the client signed SPARK_PREPARE_TRANSFER; the server
+  // publishes it. May return { swap_completed: true }, meaning the client must
+  // re-prepare and sign the next package (the swap loop).
+  publishSend: (
+    userId: string,
+    apiKey: string,
+    prepareId: string,
+    signed: SignedTransferDto
+  ) =>
+    call<PublishResult>(`/users/${userId}/payments/send/publish`, {
+      method: "POST",
+      body: JSON.stringify({ prepare_id: prepareId, signed }),
+      apiKey,
     }),
 
   receive: (
@@ -192,7 +280,15 @@ export const api = {
 
 const STORAGE_KEY = "sdk-mu-demo.creds";
 
-export type Creds = { user_id: string; api_key: string };
+export type Creds = {
+  user_id: string;
+  api_key: string;
+  // Present only for turnkey deployments — the client signs sends against it.
+  turnkey_sub_org_id?: string | null;
+  // The passkey credential registered as this sub-org's root user. Pins the
+  // send's WebAuthn prompt to the right passkey among any others on the device.
+  turnkey_credential_id?: string | null;
+};
 
 export function loadCreds(): Creds | null {
   if (typeof window === "undefined") return null;
