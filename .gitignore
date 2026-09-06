@@ -35,5 +35,3 @@ logs/
 node_modules/
 .next/
 .vercel/
-
-.planning/debug/
